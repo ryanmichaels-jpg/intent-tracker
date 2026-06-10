@@ -1,0 +1,4 @@
+# Ingest engine (normalize.py) is pure stdlib — nothing required for it.
+# The Sheets uploader (ingest/upload_to_sheet.py) needs the Google API client:
+google-api-python-client>=2.0.0
+google-auth>=2.0.0

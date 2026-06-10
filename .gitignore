@@ -1,0 +1,31 @@
+# Never commit data
+data/raw/
+data/out/
+*.csv
+*.xlsx
+*.json
+!ingest/schema.csv
+
+# Secrets / local config
+.env
+*.local
+secrets.*
+
+# Real scrape targets are employer-specific — keep them out of git.
+# (the generic config/targets.example.json IS committed as a template; the broad *.json
+#  data rule above would otherwise hide it, so re-include it explicitly)
+config/targets.json
+!config/targets.example.json
+# Track 3 watchlist holds real creator names — keep populated files out of git.
+config/watchlist.json
+config/watchlist_candidates.json
+config/review_candidates.json
+!config/watchlist.example.json
+!config/watchlist_candidates.example.json
+!config/review_candidates.example.json
+
+# OS / editor
+.DS_Store
+__pycache__/
+*.pyc
+.venv/

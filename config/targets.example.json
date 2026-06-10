@@ -1,0 +1,57 @@
+{
+  "_comment": "Copy to config/targets.json (gitignored) and fill with REAL targets. Keep all employer-specific names/URLs out of git. Placeholders below are generic on purpose. Markers/terms/thresholds (bait_discovery) are non-sensitive and CAN stay here.",
+
+  "engagement": {
+    "competitor_company_urls": [
+      "https://www.linkedin.com/company/competitor-one",
+      "https://www.linkedin.com/company/competitor-two"
+    ],
+    "competitor_exec_urls": [
+      "https://www.linkedin.com/in/competitor-exec-one",
+      "https://www.linkedin.com/in/competitor-exec-two"
+    ],
+    "competitor_label": {
+      "https://www.linkedin.com/company/competitor-one": "Competitor One",
+      "https://www.linkedin.com/in/competitor-exec-one": "Competitor One"
+    },
+    "drop_list": [
+      "https://www.linkedin.com/company/dead-competitor-page"
+    ],
+    "exclude_hiring_posts": true,
+    "exclude_engager_companies": [
+      "competitor-one", "competitor-two", "your-own-company"
+    ],
+    "include_approved_watchlist": true,
+    "enrich_current_company": true,
+    "posted_limit": "week",
+    "posts_per_target": 5,
+    "max_reactions_per_post": 10,
+    "max_comments_per_post": 20
+  },
+
+  "jobs": {
+    "_comment": "Use a few BROAD seed titles + a positive relevance filter; LinkedIn job search is fuzzy. Avoid bare, ambiguous seed tokens (a short word can match unrelated results).",
+    "titles": ["Your Primary Target Role", "Your Secondary Target Role"],
+    "locations": ["United States"],
+    "max_per_title": 25,
+    "posted_limit": "week",
+    "relevance_keywords": ["your-keyword-one", "your-keyword-two"],
+    "exclude_title_keywords": ["sales", "intern", "physician", "nurse", "attorney", "paralegal"],
+    "exclude_competitor_companies": true
+  },
+
+  "bait_discovery": {
+    "_comment": "Track 3: find target creators posting engagement-bait, then human-approve them into the watchlist. Bait = comment/DM call-to-action PAIRED WITH a promised deliverable (regex in scrape.py: BAIT_CTA_RE + BAIT_DELIVERABLE_RE); hiring posts excluded.",
+    "post_search_actor": "harvestapi~linkedin-post-search",
+    "target_terms": ["your-keyword-one", "your-keyword-two", "your-keyword-three"],
+    "recency_days": 7,
+    "min_engagement": 5,
+    "min_bait_posts": 1,
+    "max_posts_per_query": 20,
+    "max_comments": 20
+  },
+
+  "icp": {
+    "_comment": "OPTIONAL. Retarget the engagement + bait-discovery tracks to YOUR ICP without editing code. Add any of: tier1 / tier2 / exclude / hiring (regex strings, case-insensitive) and themes ([regex, label] pairs, first match wins). Each overrides the matching built-in placeholder default in scripts/scrape.py; any key you omit keeps its default, so leaving only this comment = use the defaults. Full copy-paste block and a Cursor-style dev-ICP example are in docs/ADAPTING.md."
+  }
+}

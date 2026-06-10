@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Template. scripts/install_schedule.sh substitutes __REPO_DIR__ and installs this to
+     ~/Library/LaunchAgents/com.comp-intel-hub.weekly.plist. Runs Sunday 21:00 local.
+     `caffeinate -i` keeps the machine awake for the duration of the run. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.comp-intel-hub.weekly</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/caffeinate</string>
+    <string>-i</string>
+    <string>/bin/bash</string>
+    <string>__REPO_DIR__/scripts/run_weekly_ingest.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>0</integer>
+    <key>Hour</key><integer>21</integer>
+    <key>Minute</key><integer>0</integer>
+  </dict>
+  <key>StandardOutPath</key>
+  <string>/tmp/comp-intel-weekly.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/comp-intel-weekly.log</string>
+  <key>RunAtLoad</key>
+  <false/>
+</dict>
+</plist>

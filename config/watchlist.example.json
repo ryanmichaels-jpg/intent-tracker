@@ -1,0 +1,11 @@
+{
+  "_comment": "APPROVED bait-creators whose engagers we harvest going forward. Copy to config/watchlist.json (gitignored). Only entries here feed engagement runs; populate by approving candidates from watchlist_candidates.json.",
+  "approved": [
+    {
+      "author": "Example Target Creator",
+      "url": "https://www.linkedin.com/in/example-target-creator",
+      "approved_on": "2026-01-01",
+      "note": "why this person is a real target creator worth tracking"
+    }
+  ]
+}

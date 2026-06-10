@@ -1,0 +1,571 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Competitive Intent Hub — Full Weekly Pipeline</title>
+<style>
+  :root {
+    --bg: #0d0d0f;
+    --bg-elev: #141417;
+    --surface: #1a1a1e;
+    --surface-2: #202024;
+    --border: #26262c;
+    --border-soft: #1d1d22;
+    --text: #f5f5f7;
+    --text-muted: #98989f;
+    --text-faint: #6b6b73;
+    --accent: #F59E0B;
+    --accent-soft: rgba(245,158,11,0.12);
+
+    /* Role colors — matched to the canonical reference legend */
+    --role-trigger: #3B82F6;     /* blue */
+    --role-processing: #22C55E;  /* green */
+    --role-decision: #A855F7;    /* violet */
+    --role-dropped: #EF4444;     /* red */
+    --role-hub: #06B6D4;         /* cyan — data / hub write */
+    --role-loop: #14B8A6;        /* teal — loop back */
+    --role-cost: #F97316;        /* orange — cost gate */
+    --role-notify: #EC4899;      /* pink — output / notify */
+
+    --font-display: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", Menlo, Monaco, "Cascadia Mono", monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-display);
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    padding: 32px 16px;
+    min-height: 100vh;
+  }
+
+  .container {
+    max-width: 1280px;
+    margin: 0 auto;
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 36px;
+    box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 8px 32px rgba(0,0,0,0.4);
+  }
+
+  header { border-bottom: 1px solid var(--border-soft); padding-bottom: 22px; margin-bottom: 10px; }
+  header .eyebrow {
+    font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.15em;
+    text-transform: uppercase; color: var(--accent); margin-bottom: 8px;
+  }
+  header h1 { font-size: 27px; font-weight: 700; letter-spacing: -0.01em; line-height: 1.15; margin-bottom: 6px; }
+  header p { color: var(--text-muted); font-size: 14.5px; line-height: 1.5; max-width: 820px; }
+
+  .diagram { padding: 26px 0 8px; display: flex; flex-direction: column; align-items: center; }
+
+  .node {
+    background: var(--surface);
+    border: 1.5px solid var(--border);
+    border-radius: 10px;
+    padding: 11px 15px;
+    width: 210px;
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.2s ease;
+    position: relative;
+    text-align: left;
+  }
+  .node:hover { transform: translateY(-2px); border-color: var(--text-faint); }
+  .node.dim { opacity: 0.22; }
+  .node.active { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+
+  .node .role {
+    font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.13em;
+    text-transform: uppercase; margin-bottom: 6px; font-weight: 700;
+  }
+  .node .label { font-size: 14px; font-weight: 600; line-height: 1.22; color: var(--text); margin-bottom: 3px; }
+  .node .label.mono { font-family: var(--font-mono); font-size: 12.5px; }
+  .node .sub { font-size: 11px; color: var(--text-muted); line-height: 1.35; }
+
+  .node.trigger    { border-left: 3px solid var(--role-trigger); }   .node.trigger .role    { color: var(--role-trigger); }
+  .node.processing { border-left: 3px solid var(--role-processing); }.node.processing .role { color: var(--role-processing); }
+  .node.decision   { border-left: 3px solid var(--role-decision); }  .node.decision .role   { color: var(--role-decision); }
+  .node.dropped    { border-left: 3px solid var(--role-dropped); border-style: dashed; }
+  .node.dropped .role { color: var(--role-dropped); }
+  .node.hub        { border-left: 3px solid var(--role-hub); }       .node.hub .role        { color: var(--role-hub); }
+  .node.cost       { border-left: 3px solid var(--role-cost); }      .node.cost .role       { color: var(--role-cost); }
+  .node.notify     { border-left: 3px solid var(--role-notify); }    .node.notify .role     { color: var(--role-notify); }
+
+  /* layout helpers */
+  .tracks { display: flex; gap: 30px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+  .track { display: flex; flex-direction: column; align-items: center; }
+  .track-title {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--accent); border: 1px solid var(--accent); background: var(--accent-soft);
+    border-radius: 4px; padding: 4px 12px; margin-bottom: 14px; font-weight: 700;
+  }
+  .spine { display: flex; flex-direction: column; align-items: center; }
+  .routes { display: flex; gap: 26px; justify-content: center; align-items: flex-start; flex-wrap: wrap; }
+  .route-col { display: flex; flex-direction: column; align-items: center; }
+
+  /* vertical arrow */
+  .av { width: 1.5px; height: 30px; background: var(--border); margin: 3px 0; position: relative; }
+  .av::after { content: ""; position: absolute; bottom: -2px; left: -4px; border: 5px solid transparent; border-top-color: var(--border); }
+  .av .lbl {
+    position: absolute; left: 11px; top: 50%; transform: translateY(-50%);
+    font-family: var(--font-mono); font-size: 9.5px; color: var(--text-faint); white-space: nowrap;
+  }
+  .av.lit { background: var(--accent); } .av.lit::after { border-top-color: var(--accent); } .av.lit .lbl { color: var(--accent); }
+  .av.link-only { display: none; }
+
+  /* decision-with-drop: drop node sits left of the decision */
+  .drow { display: flex; align-items: center; gap: 0; }
+  .ah { width: 34px; height: 1.5px; background: var(--role-dropped); position: relative; margin: 0 2px; }
+  .ah::after { content: ""; position: absolute; left: -2px; top: -4px; border: 5px solid transparent; border-right-color: var(--role-dropped); }
+  .ah .lbl {
+    position: absolute; top: -16px; left: 50%; transform: translateX(-50%);
+    font-family: var(--font-mono); font-size: 9px; color: var(--role-dropped); font-weight: 700;
+  }
+  .ah.lit { background: var(--accent); } .ah.lit::after { border-right-color: var(--accent); }
+
+  /* converge: labeled stubs feeding one node below */
+  .converge { display: flex; gap: 150px; justify-content: center; align-items: flex-end; }
+
+  .loopnote {
+    font-family: var(--font-mono); font-size: 10px; color: var(--role-loop);
+    border: 1px dashed var(--role-loop); border-radius: 6px; padding: 6px 12px;
+    margin-top: 10px; background: rgba(20,184,166,0.07);
+  }
+
+  .legend {
+    margin-top: 30px; padding-top: 20px; border-top: 1px solid var(--border-soft);
+    display: flex; gap: 18px 22px; flex-wrap: wrap; justify-content: center;
+  }
+  .legend .item {
+    display: flex; align-items: center; gap: 7px; font-family: var(--font-mono);
+    font-size: 10.5px; color: var(--text-muted); letter-spacing: 0.05em; text-transform: uppercase;
+  }
+  .legend .swatch {
+    width: 13px; height: 13px; border-radius: 3px; background: var(--surface);
+    border-left: 3px solid; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  }
+
+  .tooltip {
+    position: fixed; background: var(--surface-2); border: 1px solid var(--border); color: var(--text);
+    padding: 8px 12px; border-radius: 6px; font-size: 12px; line-height: 1.45; pointer-events: none;
+    opacity: 0; transition: opacity 0.15s; z-index: 1000; max-width: 290px; box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  }
+  .tooltip.visible { opacity: 1; }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <header>
+    <div class="eyebrow">GTM · Competitive Intelligence · Full Flow</div>
+    <h1>Competitive Intent Hub — Full Weekly Pipeline</h1>
+    <p>Three signal tracks — competitor engagement, a self-growing bait-discovery loop, and target-role job postings — land in a synced Drive folder, where a cloud task matches each row to Salesforce and routes it to the owning SDR, then refreshes the team hub and notifies. Click any node to trace its connections; hover for detail.</p>
+  </header>
+
+  <main class="diagram" id="diagram">
+
+    <!-- TRIGGER -->
+    <div class="node trigger" data-id="sched" data-tip="macOS LaunchAgent on the scrape machine fires every Sunday at 21:00 (Mac wakes 20:55), wrapped in caffeinate. Kicks off all three scrape tracks.">
+      <div class="role">Trigger</div>
+      <div class="label">Weekly schedule</div>
+      <div class="sub">Sunday 21:00 · scrape machine · launchd + caffeinate</div>
+    </div>
+    <div class="av" data-from="sched" data-to="eng1"><span class="lbl">runs all tracks</span></div>
+    <div class="av link-only" data-from="sched" data-to="dis1"></div>
+    <div class="av link-only" data-from="sched" data-to="job1"></div>
+
+    <!-- THREE TRACKS -->
+    <div class="tracks">
+
+      <!-- ENGAGEMENT TRACK -->
+      <div class="track">
+        <div class="track-title">Engagement track</div>
+
+        <div class="node processing" data-id="eng1" data-tip="Apify competitor-post-engagers: pulls recent posts from competitor company pages, target execs, and the approved creator watchlist (last 7 days, top posts).">
+          <div class="role">Processing</div>
+          <div class="label">Pull competitor posts</div>
+          <div class="sub">competitor-post-engagers · 7d · incl. watchlist</div>
+        </div>
+        <div class="av" data-from="eng1" data-to="edec1"></div>
+
+        <div class="drow">
+          <div class="node dropped" data-id="edrop1" data-tip="Hiring / job posts are excluded — the people engaging with them are job-seekers, not buyers.">
+            <div class="role">Dropped</div>
+            <div class="label">Drop post</div>
+            <div class="sub">engagers are job seekers</div>
+          </div>
+          <div class="ah" data-from="edec1" data-to="edrop1"><span class="lbl">Yes</span></div>
+          <div class="node decision" data-id="edec1" data-tip="exclude_post_keywords filter: is this a hiring / job post rather than a content post?">
+            <div class="role">Decision</div>
+            <div class="label">Hiring / job post?</div>
+            <div class="sub">exclude_post_keywords</div>
+          </div>
+        </div>
+        <div class="av" data-from="edec1" data-to="eng2"><span class="lbl">No</span></div>
+
+        <div class="node processing" data-id="eng2" data-tip="Collect every reactor and commenter on the kept posts.">
+          <div class="role">Processing</div>
+          <div class="label">Extract engagers</div>
+          <div class="sub">all reactors + commenters</div>
+        </div>
+        <div class="av" data-from="eng2" data-to="eng3"><span class="lbl">enrich title/company</span></div>
+
+        <div class="node processing" data-id="eng3" data-tip="Enrich via linkedin-profile-scraper, then tag ICP fit on the real title: keep target personas; deprioritize sales, engineering, TA.">
+          <div class="role">Processing</div>
+          <div class="label">Tag ICP fit</div>
+          <div class="sub">target persona kw · drop sales, eng, TA</div>
+        </div>
+        <div class="av" data-from="eng3" data-to="edec2"></div>
+
+        <div class="drow">
+          <div class="node dropped" data-id="edrop2" data-tip="Competitor employees and own-company staff are not buyers — dropped.">
+            <div class="role">Dropped</div>
+            <div class="label">Drop engager</div>
+            <div class="sub">competitor / own-company staff</div>
+          </div>
+          <div class="ah" data-from="edec2" data-to="edrop2"><span class="lbl">Yes</span></div>
+          <div class="node decision" data-id="edec2" data-tip="Is the engager's company a competitor or our own company?">
+            <div class="role">Decision</div>
+            <div class="label">Company = competitor?</div>
+            <div class="sub">competitor / own-company</div>
+          </div>
+        </div>
+        <div class="av" data-from="edec2" data-to="eng4"><span class="lbl">No</span></div>
+
+        <div class="node processing" data-id="eng4" data-tip="Flag hand-raisers: a comment carrying a CTA + delivery verb (the comment itself is the buying trigger word) is marked Hand Raiser = Y.">
+          <div class="role">Processing</div>
+          <div class="label">Flag bait &amp; hand-raisers</div>
+          <div class="sub">CTA + delivery verb · comment is the trigger</div>
+        </div>
+        <div class="av" data-from="eng4" data-to="engcsv"><span class="lbl">leads + hand-raisers</span></div>
+
+        <div class="node hub" data-id="engcsv" data-tip="Written to data/raw/engagement-{date}.csv in the synced drop folder.">
+          <div class="role">Data / Hub</div>
+          <div class="label mono">engagement-{date}.csv</div>
+          <div class="sub">→ Drive drop folder</div>
+        </div>
+      </div>
+
+      <!-- DISCOVERY / BAIT LOOP -->
+      <div class="track">
+        <div class="track-title">Bait-discovery loop</div>
+
+        <div class="node processing" data-id="dis1" data-tip="Apify linkedin-post-search, run weekly across target keywords. Two-pass and cost-optimized.">
+          <div class="role">Processing</div>
+          <div class="label">Discovery: post-search</div>
+          <div class="sub">target keywords · two-pass · weekly</div>
+        </div>
+        <div class="av" data-from="dis1" data-to="dis2"><span class="lbl">pass 1 · text only</span></div>
+
+        <div class="node processing" data-id="dis2" data-tip="Pass 1 (cheap, no comment scraping): detect bait on the post text via target keywords, hiring excluded.">
+          <div class="role">Processing</div>
+          <div class="label">Detect bait posts</div>
+          <div class="sub">target keywords · hiring excluded</div>
+        </div>
+        <div class="av" data-from="dis2" data-to="dis3"></div>
+
+        <div class="node decision" data-id="dis3" data-tip="Keep recent bait-pattern posts above a minimum engagement, capped per query to control spend.">
+          <div class="role">Decision</div>
+          <div class="label">Keep bait posts?</div>
+          <div class="sub">recent · min engagement · capped</div>
+        </div>
+
+        <div class="converge" style="gap: 26px; margin-top: 6px;">
+          <div class="av" data-from="dis3" data-to="dcom"><span class="lbl">surface now</span></div>
+          <div class="av" data-from="dis3" data-to="dgrp"><span class="lbl">grow watchlist</span></div>
+        </div>
+
+        <div class="tracks" style="gap: 22px; align-items: flex-start;">
+          <!-- surface-now sub-branch -->
+          <div class="track">
+            <div class="node processing" data-id="dcom" data-tip="Pass 2 (targeted): scrape comments ONLY on the handful of bait posts via linkedin-post-comments — cheap because it's just those posts.">
+              <div class="role">Processing</div>
+              <div class="label">Scrape bait comments</div>
+              <div class="sub">only the few bait posts</div>
+            </div>
+            <div class="av" data-from="dcom" data-to="dhr"></div>
+            <div class="node processing" data-id="dhr" data-tip="Commenters on bait posts become hand-raiser rows (Hand Raiser = Y), enriched and ICP-gated. Reach reps this week — not held behind a threshold.">
+              <div class="role">Processing</div>
+              <div class="label">Bait commenters → hand-raisers</div>
+              <div class="sub">enriched · ICP-gated · Hand Raiser = Y</div>
+            </div>
+            <div class="av" data-from="dhr" data-to="baitcsv"></div>
+            <div class="node hub" data-id="baitcsv" data-tip="Written to data/raw/bait_engagement-{date}.csv in the drop folder, alongside the engagement CSV.">
+              <div class="role">Data / Hub</div>
+              <div class="label mono">bait_engagement.csv</div>
+              <div class="sub">→ Drive drop folder</div>
+            </div>
+          </div>
+          <!-- grow-watchlist sub-branch -->
+          <div class="track">
+            <div class="node processing" data-id="dgrp" data-tip="Group the bait posts by author and count how many each posted in the window.">
+              <div class="role">Processing</div>
+              <div class="label">Group by author, count</div>
+              <div class="sub">bait posts over the window</div>
+            </div>
+            <div class="av" data-from="dgrp" data-to="dqual"></div>
+            <div class="node decision" data-id="dqual" data-tip="Authors at or above the bait-post threshold qualify as target creators — candidates for the watchlist.">
+              <div class="role">Decision</div>
+              <div class="label">Author ≥ N bait posts?</div>
+              <div class="sub">qualify as target creator</div>
+            </div>
+            <div class="av" data-from="dqual" data-to="dcand"><span class="lbl">candidate</span></div>
+            <div class="node decision" data-id="dcand" data-tip="Candidates land in watchlist_candidates.json behind a human-review gate — you approve real target creators into config/watchlist.json.">
+              <div class="role">Decision</div>
+              <div class="label">Human review</div>
+              <div class="sub">watchlist_candidates.json · approve</div>
+            </div>
+            <div class="av" data-from="dcand" data-to="dwl"><span class="lbl">approved</span></div>
+            <div class="node hub" data-id="dwl" data-tip="config/watchlist.json — the self-growing approved creator list that feeds next week's engagement pull.">
+              <div class="role">Data / Hub</div>
+              <div class="label mono">watchlist.json</div>
+              <div class="sub">self-growing · approved creators</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="loopnote" data-id="loop" data-tip="The approved watchlist is added to next week's competitor-post-engagers inputs — the loop that grows the system over time.">↺ feeds next week's engagement pull</div>
+        <div class="av link-only" data-from="dwl" data-to="eng1"></div>
+      </div>
+
+      <!-- JOBS TRACK -->
+      <div class="track">
+        <div class="track-title">Job-posting track</div>
+
+        <div class="node processing" data-id="job1" data-tip="Apify linkedin-job-search for hiring intent, run weekly.">
+          <div class="role">Processing</div>
+          <div class="label">Jobs: run search</div>
+          <div class="sub">job-posting-intent · weekly</div>
+        </div>
+        <div class="av" data-from="job1" data-to="cost"></div>
+
+        <div class="node cost" data-id="cost" data-tip="Estimate-only cost pass confirms expected Apify spend before any live job scraping.">
+          <div class="role">Cost Gate</div>
+          <div class="label">Estimate cost first</div>
+          <div class="sub">--estimate-only · confirm spend</div>
+        </div>
+        <div class="av" data-from="cost" data-to="job2"><span class="lbl">approved</span></div>
+
+        <div class="node processing" data-id="job2" data-tip="Search US target roles by full role name — analyst through VP — posted in the past week.">
+          <div class="role">Processing</div>
+          <div class="label">Search US target roles</div>
+          <div class="sub">analyst → VP · target roles · HRIS · equity</div>
+        </div>
+        <div class="av" data-from="job2" data-to="job3"></div>
+
+        <div class="node processing" data-id="job3" data-tip="Keep postings whose title carries a target keyword; drop off-target hits (sales/incentive roles, insurance) and competitor employers. Capped at ~25 per title.">
+          <div class="role">Processing</div>
+          <div class="label">Filter to relevant</div>
+          <div class="sub">relevance kw · drop off-target · max 25/title</div>
+        </div>
+        <div class="av" data-from="job3" data-to="jobjson"><span class="lbl">hiring signals</span></div>
+
+        <div class="node hub" data-id="jobjson" data-tip="Written to data/raw/job-postings-{date}.json in the drop folder.">
+          <div class="role">Data / Hub</div>
+          <div class="label mono">job-postings.json</div>
+          <div class="sub">→ Drive drop folder</div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- CONVERGE INTO DRIVE -->
+    <div class="converge">
+      <div class="av" data-from="engcsv" data-to="drive"><span class="lbl">engagement</span></div>
+      <div class="av" data-from="baitcsv" data-to="drive"><span class="lbl">hand-raisers</span></div>
+      <div class="av" data-from="jobjson" data-to="drive"><span class="lbl">job postings</span></div>
+    </div>
+
+    <!-- SPINE: Drive → match → route → notify -->
+    <div class="spine">
+      <div class="node hub" data-id="drive" data-tip="comp-intel-raw — a Drive-for-Desktop folder that auto-syncs to the cloud. The scrape side never runs on the work machine; only this folder crosses over.">
+        <div class="role">Data / Hub</div>
+        <div class="label">Drive drop folder</div>
+        <div class="sub">comp-intel-raw · auto-syncs · never on work machine</div>
+      </div>
+      <div class="av" data-from="drive" data-to="mon"><span class="lbl">auto-sync</span></div>
+
+      <div class="drow">
+        <div class="node notify" data-id="ping" data-tip="If no new file has synced by the scheduled time, send a failure alert so a missed scrape never passes silently.">
+          <div class="role">Output / Notify</div>
+          <div class="label">Ping owner</div>
+          <div class="sub">no new file = failure alert</div>
+        </div>
+        <div class="ah" style="background: var(--role-notify);" data-from="mon" data-to="ping"><span class="lbl" style="color: var(--role-notify);">No</span></div>
+        <div class="node decision" data-id="mon" data-tip="A Cowork cloud task checks the synced folder for a fresh batch at the scheduled time.">
+          <div class="role">Decision</div>
+          <div class="label">New file by sched time?</div>
+          <div class="sub">Cowork cloud task</div>
+        </div>
+      </div>
+      <div class="av" data-from="mon" data-to="pick"><span class="lbl">Yes</span></div>
+
+      <div class="node processing" data-id="pick" data-tip="Pick the newest unprocessed batch and mark it processed, so a file is never double-loaded.">
+        <div class="role">Processing</div>
+        <div class="label">Pick newest unprocessed</div>
+        <div class="sub">mark processed · never double-load</div>
+      </div>
+      <div class="av" data-from="pick" data-to="match"></div>
+
+      <div class="node processing" data-id="match" data-tip="Match each row's company to Salesforce — domain first, then fuzzy name (0.75–0.90 flagged for human review).">
+        <div class="role">Processing</div>
+        <div class="label">Match company → SFDC</div>
+        <div class="sub">domain first, then fuzzy name</div>
+      </div>
+      <div class="av" data-from="match" data-to="fields"></div>
+
+      <div class="node processing" data-id="fields" data-tip="Pull the SFDC fields that drive routing: account owner, Assigned SDR, segment, tier, intent score, open posts.">
+        <div class="role">Processing</div>
+        <div class="label">Pull SFDC fields</div>
+        <div class="sub">owner · SDR · segment · tier · intent</div>
+      </div>
+      <div class="av" data-from="fields" data-to="route"><span class="lbl">routing inputs</span></div>
+
+      <div class="node decision" data-id="route" data-tip="Route each row by its Assigned SDR into one of three destinations.">
+        <div class="role">Decision</div>
+        <div class="label">Route by Assigned SDR</div>
+        <div class="sub">3 destinations</div>
+      </div>
+
+      <div class="converge" style="gap: 30px; margin-top: 6px;">
+        <div class="av" data-from="route" data-to="reptab"><span class="lbl">rep</span></div>
+        <div class="av" data-from="route" data-to="gradtab"><span class="lbl">no SDR</span></div>
+        <div class="av" data-from="route" data-to="untab"><span class="lbl">no match</span></div>
+      </div>
+
+      <div class="routes">
+        <div class="route-col">
+          <div class="node hub" data-id="reptab" data-tip="Assigned SDR is a known rep — the row lands on that rep's materialized tab.">
+            <div class="role">Data / Hub</div>
+            <div class="label">Rep's tab</div>
+            <div class="sub">Assigned SDR = a rep</div>
+          </div>
+          <div class="av" data-from="reptab" data-to="newrep"></div>
+        </div>
+        <div class="route-col">
+          <div class="node hub" data-id="gradtab" data-tip="Matched to an account with no Assigned SDR — claimable by any rep.">
+            <div class="role">Data / Hub</div>
+            <div class="label">Gradient Ready tab</div>
+            <div class="sub">no SDR · claimable</div>
+          </div>
+          <div class="av" data-from="gradtab" data-to="newrep"></div>
+        </div>
+        <div class="route-col">
+          <div class="node hub" data-id="untab" data-tip="No SFDC match at all — whitespace to investigate.">
+            <div class="role">Data / Hub</div>
+            <div class="label">Unassigned tab</div>
+            <div class="sub">no SFDC match · whitespace</div>
+          </div>
+          <div class="av" data-from="untab" data-to="newrep"></div>
+        </div>
+      </div>
+
+      <div class="node processing" data-id="newrep" data-tip="Tag each row NEW, or REPEAT if the person/company appeared in a prior week or engaged with two or more posts this week.">
+        <div class="role">Processing</div>
+        <div class="label">Compute NEW vs REPEAT</div>
+        <div class="sub">REPEAT if prior week or 2+ this week</div>
+      </div>
+      <div class="av" data-from="newrep" data-to="hub"></div>
+
+      <div class="node hub" data-id="hub" data-tip="Append the batch to the Master tab and refresh the per-rep tabs and the 'This Week' team snapshot.">
+        <div class="role">Data / Hub</div>
+        <div class="label">Update hub + 'This Week'</div>
+        <div class="sub">append Master · refresh team snapshot</div>
+      </div>
+
+      <div class="converge" style="gap: 60px; margin-top: 6px;">
+        <div class="av" data-from="hub" data-to="summary"><span class="lbl">digest</span></div>
+        <div class="av" data-from="hub" data-to="reps"><span class="lbl">live tabs</span></div>
+      </div>
+
+      <div class="routes">
+        <div class="route-col">
+          <div class="node notify" data-id="summary" data-tip="Post a summary to Email / Slack: what's new, what's hot, and this week's hand-raisers.">
+            <div class="role">Output / Notify</div>
+            <div class="label">Post summary</div>
+            <div class="sub">Email / Slack · new · hot · hand-raisers</div>
+          </div>
+        </div>
+        <div class="route-col">
+          <div class="node notify" data-id="reps" data-tip="Each rep opens only their own tab and works the rows — consume only, no editing of the engine output.">
+            <div class="role">Output / Notify</div>
+            <div class="label">Reps act on data</div>
+            <div class="sub">open own tab · consume only</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </main>
+
+  <div class="legend">
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-trigger);"></div>Trigger</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-processing);"></div>Processing</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-decision);"></div>Decision</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-dropped);"></div>Dropped</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-hub);"></div>Data / Hub</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-loop);"></div>Loop Back</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-cost);"></div>Cost Gate</div>
+    <div class="item"><div class="swatch" style="border-left-color: var(--role-notify);"></div>Output / Notify</div>
+  </div>
+
+</div>
+
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+  const tooltip = document.getElementById('tooltip');
+  const diagram = document.getElementById('diagram');
+
+  function getAllNodes() { return diagram.querySelectorAll('.node'); }
+  function getAllArrows() { return diagram.querySelectorAll('.av, .ah'); }
+
+  function reset() {
+    getAllNodes().forEach(n => n.classList.remove('active', 'dim'));
+    getAllArrows().forEach(a => a.classList.remove('lit', 'dim'));
+  }
+
+  getAllNodes().forEach(n => {
+    n.addEventListener('mouseenter', () => {
+      if (n.dataset.tip) { tooltip.textContent = n.dataset.tip; tooltip.classList.add('visible'); }
+    });
+    n.addEventListener('mousemove', e => {
+      tooltip.style.left = (e.clientX + 14) + 'px';
+      tooltip.style.top = (e.clientY + 14) + 'px';
+    });
+    n.addEventListener('mouseleave', () => tooltip.classList.remove('visible'));
+
+    n.addEventListener('click', e => {
+      e.stopPropagation();
+      const wasActive = n.classList.contains('active');
+      reset();
+      if (wasActive) return;
+      const id = n.dataset.id;
+      const connected = new Set([id]);
+      getAllArrows().forEach(a => {
+        if (a.dataset.from === id) connected.add(a.dataset.to);
+        if (a.dataset.to === id) connected.add(a.dataset.from);
+      });
+      getAllNodes().forEach(other => {
+        if (connected.has(other.dataset.id)) { if (other === n) other.classList.add('active'); }
+        else { other.classList.add('dim'); }
+      });
+      getAllArrows().forEach(a => {
+        if (a.dataset.from === id || a.dataset.to === id) a.classList.add('lit');
+        else a.classList.add('dim');
+      });
+      n.classList.add('active');
+    });
+  });
+
+  document.addEventListener('click', reset);
+</script>
+
+</body>
+</html>

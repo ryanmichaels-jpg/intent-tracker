@@ -29,6 +29,6 @@ launchctl enable "$DOMAIN/$LABEL"
 echo "loaded $LABEL — runs Sunday 21:00 local. Log: /tmp/comp-intel-weekly.log"
 echo
 echo "To actually WAKE the Mac if it's asleep at 21:00 (needs sudo, one-time):"
-echo "  sudo pmset repeat wakeorpoweron S 20:55:00"
+echo "  sudo pmset repeat wakeorpoweron U 20:55:00"
 echo "Verify with:  pmset -g sched     |  launchctl print $DOMAIN/$LABEL | grep -i state"
 echo "Trigger a manual run now:  launchctl kickstart -k $DOMAIN/$LABEL"

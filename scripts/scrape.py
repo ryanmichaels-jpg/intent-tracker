@@ -162,11 +162,24 @@ def out_dir():
     return os.path.expanduser(d)
 
 
-def apify_run(actor, payload, attempts=3):
+def apify_run(actor, payload, attempts=3, fatal=True, fields=None):
+    """Run an actor and return its dataset items. `fields` (list of top-level keys) limits the
+    returned columns via the dataset query param — crucial for big records (e.g. profiles), since
+    the egress proxy truncates very large inline responses. With fatal=False a final failure logs
+    a warning and returns None instead of aborting the whole run (lets callers degrade gracefully)."""
     token = os.environ.get("APIFY_API_TOKEN")
     if not token:
         sys.exit("ERROR: APIFY_API_TOKEN not set (see .env).")
     url = f"{APIFY_BASE}/{actor}/run-sync-get-dataset-items?token={token}"
+    if fields:
+        url += "&fields=" + ",".join(fields)
+
+    def fail(msg):
+        if fatal:
+            sys.exit("ERROR: " + msg)
+        print("WARNING: " + msg + " — continuing without this batch", file=sys.stderr)
+        return None
+
     for i in range(attempts):
         req = urllib.request.Request(url, data=json.dumps(payload).encode(),
                                      headers={"Content-Type": "application/json"})
@@ -179,7 +192,7 @@ def apify_run(actor, payload, attempts=3):
                 print(f"[apify] {actor} {e.code}, retrying ({i+1}/{attempts})…", file=sys.stderr)
                 time.sleep(5 * (i + 1))
                 continue
-            sys.exit(f"ERROR: Apify {actor} returned {e.code}: {e.read().decode()[:300]}")
+            return fail(f"Apify {actor} returned {e.code}: {e.read().decode()[:300]}")
         except (http.client.IncompleteRead, ConnectionError) as e:
             # Large chunked dataset responses can be truncated mid-stream through the proxy;
             # the actor run already succeeded, so just re-fetch the result.
@@ -188,13 +201,13 @@ def apify_run(actor, payload, attempts=3):
                       f"({i+1}/{attempts})…", file=sys.stderr)
                 time.sleep(5 * (i + 1))
                 continue
-            sys.exit(f"ERROR: Apify {actor} truncated read after {attempts} attempts: {e}")
+            return fail(f"Apify {actor} truncated read after {attempts} attempts: {e}")
         except urllib.error.URLError as e:
             if i < attempts - 1:
                 print(f"[apify] {actor} url error, retrying ({i+1}/{attempts})…", file=sys.stderr)
                 time.sleep(5 * (i + 1))
                 continue
-            sys.exit(f"ERROR: Apify {actor} url error: {e}")
+            return fail(f"Apify {actor} url error: {e}")
 
 
 def parse_company(headline):
@@ -479,10 +492,17 @@ def enrich_current_company(rows):
                         keys.append(cand[vk])
         return keys
 
-    CHUNK = 40  # smaller batches -> smaller responses, less prone to mid-stream truncation
+    # Only the fields we actually read — keeps each response small so the proxy doesn't truncate
+    # the big default profile records. Combined with small batches, a failed batch is skipped
+    # (fatal=False) rather than aborting the run, so we still get a (partially enriched) CSV.
+    CHUNK = 25
+    FIELDS = ["currentPosition", "experience", "publicIdentifier", "linkedinUrl", "originalQuery"]
     for i in range(0, len(urls), CHUNK):
         items = apify_run(PROFILE_ACTOR,
-                          {"urls": urls[i:i + CHUNK], "profileScraperMode": PROFILE_MODE})
+                          {"urls": urls[i:i + CHUNK], "profileScraperMode": PROFILE_MODE},
+                          fatal=False, fields=FIELDS)
+        if not items:  # batch failed after retries — leave these rows un-enriched, keep going
+            continue
         for p in items:
             cp = p.get("currentPosition") or p.get("experience") or []
             cp0 = cp[0] if cp and isinstance(cp[0], dict) else {}

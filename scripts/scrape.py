@@ -274,6 +274,10 @@ def run_engagement(cfg, test):
     eng = cfg.get("engagement", {})
     drop = {norm(u) for u in eng.get("drop_list", [])}
     exclude = {norm(x) for x in eng.get("exclude_engager_companies", [])}
+    # Optional per-competitor post allowlist: {label: [activity-id substring, ...]}. When a
+    # competitor label appears here, only its posts whose URL contains an allowed id are surfaced
+    # (e.g. harvest engagers from ONE specific post, not the target's whole recent feed).
+    post_allow = eng.get("post_allowlist", {})
     exclude_hiring = eng.get("exclude_hiring_posts", True)
     targets = [u for u in (eng.get("competitor_company_urls", []) + eng.get("competitor_exec_urls", []))
                if norm(u) not in drop]
@@ -342,6 +346,9 @@ def run_engagement(cfg, test):
                                "target_terms_hit": cs, "sample": text[:200], "status": "review"})
             else:
                 surface = False  # not on-target -> drop
+        if surface and competitor and post_allow.get(competitor):
+            if not any(a in (url or "") for a in post_allow[competitor]):
+                surface = False  # competitor is post-gated; this post isn't on its allowlist
         posts[pid] = {"text": text, "competitor": competitor, "url": url, "surface": surface,
                       "bait": is_bait(text),
                       "topic": summarize_topic(text, topic_cache) if surface else ""}

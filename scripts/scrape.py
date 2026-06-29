@@ -29,7 +29,7 @@ Usage:
     python3 scripts/scrape.py                           # full run, both tracks
     python3 scripts/scrape.py --track jobs              # one track only
 """
-import argparse, csv, json, os, re, sys, time, urllib.request, urllib.error
+import argparse, csv, json, os, re, sys, time, urllib.request, urllib.error, http.client
 from datetime import date
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -180,6 +180,15 @@ def apify_run(actor, payload, attempts=3):
                 time.sleep(5 * (i + 1))
                 continue
             sys.exit(f"ERROR: Apify {actor} returned {e.code}: {e.read().decode()[:300]}")
+        except (http.client.IncompleteRead, ConnectionError) as e:
+            # Large chunked dataset responses can be truncated mid-stream through the proxy;
+            # the actor run already succeeded, so just re-fetch the result.
+            if i < attempts - 1:
+                print(f"[apify] {actor} truncated read ({type(e).__name__}), retrying "
+                      f"({i+1}/{attempts})…", file=sys.stderr)
+                time.sleep(5 * (i + 1))
+                continue
+            sys.exit(f"ERROR: Apify {actor} truncated read after {attempts} attempts: {e}")
         except urllib.error.URLError as e:
             if i < attempts - 1:
                 print(f"[apify] {actor} url error, retrying ({i+1}/{attempts})…", file=sys.stderr)
@@ -470,7 +479,7 @@ def enrich_current_company(rows):
                         keys.append(cand[vk])
         return keys
 
-    CHUNK = 100
+    CHUNK = 40  # smaller batches -> smaller responses, less prone to mid-stream truncation
     for i in range(0, len(urls), CHUNK):
         items = apify_run(PROFILE_ACTOR,
                           {"urls": urls[i:i + CHUNK], "profileScraperMode": PROFILE_MODE})

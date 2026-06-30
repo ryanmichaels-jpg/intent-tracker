@@ -35,10 +35,31 @@ def looks_like_praise(quote: str) -> bool:
     return not any(s in low for s in _INTENT_SIGNALS)
 
 
+def looks_like_logistics(comment: str) -> bool:
+    """True if the comment is a short event/RSVP/location reply with no comp signal.
+
+    On lead-magnet posts the classifier reads a short ask as an active hand-raise, which
+    over-promotes pure logistics ('London please.', 'can you share details, please?').
+    Such replies carry no comp-tool intent, so a surface is downgraded to review.
+    """
+    from .comp_tools import matched_comp_tools
+
+    low = (comment or "").lower().strip()
+    if not low or len(low.split()) > 8:
+        return False
+    if "please" not in low and "?" not in low:   # must read as a request
+        return False
+    if any(s in low for s in _INTENT_SIGNALS):    # any comp/tool signal -> keep
+        return False
+    return not matched_comp_tools(low)
+
+
 def verify(lead: Lead) -> tuple[Decision, str | None]:
     """Re-check a surfaced lead. Returns (possibly downgraded decision, quality_flag)."""
     if lead.decision != Decision.surface or lead.classification is None:
         return lead.decision, None
     if looks_like_praise(lead.classification.evidence_quote):
         return Decision.review, "verification: evidence quote reads as praise, not comp intent"
+    if looks_like_logistics(lead.commenter.comment_text):
+        return Decision.review, "verification: comment is an event/logistics reply, not comp intent"
     return lead.decision, None

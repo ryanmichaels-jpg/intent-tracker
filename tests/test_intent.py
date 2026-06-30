@@ -126,6 +126,21 @@ def test_icp_parity_with_scrape():
         assert icp.is_non_icp(t) == scrape.is_non_icp(t), f"is_non_icp parity broke on {t!r}"
 
 
+def test_logistics_downgraded():
+    from intent.verify import looks_like_logistics, verify
+    assert looks_like_logistics("London please.")
+    assert looks_like_logistics("can you share details for Amsterdam, please?")
+    assert not looks_like_logistics("what are you using for benchmarking?")     # comp signal
+    assert not looks_like_logistics("we're evaluating tools to replace Radford") # comp signal + tool
+    lead = Lead(
+        commenter=Commenter(name="x", comment_text="London please."),
+        decision=Decision.surface, reason="r",
+        classification=Classification(IntentType.active_need, "n", "London please.", 0.8, "a"),
+    )
+    new_decision, flag = verify(lead)
+    assert new_decision == Decision.review and "logistics" in flag
+
+
 def test_competitor_employee_excluded():
     from intent.icp import is_competitor_employee
     assert is_competitor_employee("Bettercomp", "Co-Founder and CEO at Bettercomp")

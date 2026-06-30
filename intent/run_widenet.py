@@ -20,7 +20,7 @@ from collections import Counter
 
 from .discover import displacement_queries, union_discover
 from .extract import extract_for_post
-from .icp import is_icp
+from .icp import is_competitor_employee, is_icp
 from .posttype import classify_post_live
 from .richness import score_richness
 from .run_miner import REPO, process_comment, write_leads
@@ -51,6 +51,9 @@ def run_widenet(week: str, queries_cap: int = 5, max_posts: int = 8, cap_posts: 
             if not c.comment_text:
                 continue
             if not is_icp(c.headline or ""):   # same ICP filter as the scrape
+                continue
+            if is_competitor_employee(c.company, c.headline):  # vendor/own staff aren't buyers
+                gated_out["competitor_employee"] += 1
                 continue
             leads.append(process_comment(c, pc, live=True))
 

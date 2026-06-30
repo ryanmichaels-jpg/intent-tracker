@@ -126,6 +126,15 @@ def test_icp_parity_with_scrape():
         assert icp.is_non_icp(t) == scrape.is_non_icp(t), f"is_non_icp parity broke on {t!r}"
 
 
+def test_competitor_employee_excluded():
+    from intent.icp import is_competitor_employee
+    assert is_competitor_employee("Bettercomp", "Co-Founder and CEO at Bettercomp")
+    assert is_competitor_employee(None, "CEO at Figures")
+    assert is_competitor_employee("Pave", "Account Executive")          # own company
+    assert not is_competitor_employee("Northwind", "HR Director")       # real prospect
+    assert not is_competitor_employee("Acme", "building spreadsheets")  # manual baseline != employer
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

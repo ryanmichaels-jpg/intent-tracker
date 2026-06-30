@@ -60,3 +60,39 @@ def is_icp(title: str) -> bool:
     """KEEP gate: the title must positively match Tier 1 or Tier 2."""
     t = title or ""
     return bool(TIER1_RE.search(t) or TIER2_RE.search(t))
+
+
+# --- Competitor / own-company exclusion (the wide-net analogue of the scrape's
+# exclude_engager_companies + own_company_engager). A comp-vendor's own employees are
+# not Pave buyers. The curated scrape already does this; wide-net pulls from untrusted
+# posts, so it must too. -------------------------------------------------------------
+from .comp_tools import COMP_TOOLS  # noqa: E402
+
+# The manual baseline ("spreadsheet"/"excel") names tools, not employers — never an
+# exclusion term for a person's company.
+_MANUAL_BASELINE = {"spreadsheet", "spreadsheets", "excel", "google sheets"}
+
+
+def _vendor_terms() -> set:
+    terms = {t.lower() for t in COMP_TOOLS} - _MANUAL_BASELINE
+    path = os.path.join(REPO, "config", "targets.json")
+    try:
+        with open(path) as f:
+            eng = json.load(f).get("engagement", {})
+        terms |= {x.lower() for x in eng.get("exclude_engager_companies", [])}
+    except (ValueError, OSError):
+        pass
+    return terms
+
+
+_VENDOR_TERMS = sorted(_vendor_terms(), key=len, reverse=True)
+_VENDOR_RE = (re.compile("|".join(rf"\b{re.escape(t)}\b" for t in _VENDOR_TERMS), re.I)
+              if _VENDOR_TERMS else None)
+
+
+def is_competitor_employee(company: str | None, headline: str | None = "") -> bool:
+    """True if the commenter works at a comp vendor / our own company (drop — not a buyer).
+    Matches whole-word against the company field and headline (catches 'CEO at Bettercomp')."""
+    if not _VENDOR_RE:
+        return False
+    return bool(_VENDOR_RE.search(f"{company or ''} {headline or ''}"))

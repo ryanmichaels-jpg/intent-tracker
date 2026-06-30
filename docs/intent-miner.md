@@ -60,7 +60,34 @@ comment, profile_url, post_url.
 gate, praise verifier, richness, comp-tool matching, and a deterministic end-to-end run
 over the synthetic fixture `intent/demo/demo_comments_dump.json`.
 
+## Wide-net retriever (added)
+Beyond the curated track, `intent/run_widenet.py` finds comp bait/question/comparison
+posts across LinkedIn and mines their commenters:
+
+```
+DISCOVER (LinkedIn post-search + Google boolean + post-detail enrich)
+  -> POST-TYPE GATE (hard-drops non-qualifying — sources are untrusted)
+  -> EXTRACT comments (cookie-free comments actor, async run+poll)
+  -> ICP filter (intent/icp.py — same filter as the scrape, parity-tested)
+  -> CLASSIFY -> verbatim GATE -> VERIFY -> RICHNESS
+  -> data/out/leads-widenet-<week>.csv   (source column: native / google)
+```
+Discovery queries + the displaced-tool AND-clause live in
+`config/comp_displacement_map.json`. Needs both `APIFY_API_TOKEN` and
+`ANTHROPIC_API_KEY`. Actors (env-overridable): `harvestapi~linkedin-post-search`,
+`apify~google-search-scraper`, `apimaestro~linkedin-post-detail`,
+`harvestapi~linkedin-post-comments`.
+
+```bash
+# small pilot, past month (LinkedIn + Google):
+python3 -m intent.run_widenet --week 2026-W27 --queries 5 --max-posts 8 \
+        --cap 15 --comments 20 --posted-limit month
+# LinkedIn search only:  add --no-google
+```
+Cost scales with queries × posts × comments — all CLI knobs.
+
 ## To confirm / extend later
-- `config/pave_capabilities.json` competitor sets are the transfer-brief drafts — confirm.
-- Wide-net discovery (search-query + Google-boolean retrievers) was intentionally **not**
-  ported; current discovery stays curated (`config/targets.json`).
+- `config/pave_capabilities.json` + `config/comp_displacement_map.json` competitor sets
+  are transfer-brief drafts — confirm.
+- Wide-net commenters are ICP-filtered on the comment author's headline (no profile
+  enrichment yet); add enrichment if headline coverage proves thin.

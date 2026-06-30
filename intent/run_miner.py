@@ -44,7 +44,7 @@ def _commenter(c: dict, post: dict) -> Commenter:
         profile_url=c.get("profile_url"),
         competitor=post.get("competitor"),
         post_url=post.get("post_url"),
-        source=c.get("source", "live"),
+        source=c.get("source", "curated"),
     )
 
 
@@ -100,7 +100,7 @@ def process_post(post: dict, live: bool) -> list[Lead]:
 
 
 _FIELDS = [
-    "decision", "richness", "intent", "confidence", "name", "headline", "company",
+    "decision", "richness", "intent", "confidence", "source", "name", "headline", "company",
     "competitor", "post_type", "pave_surface", "evidence_quote", "suggested_angle",
     "reason", "comment", "profile_url", "post_url",
 ]
@@ -115,6 +115,7 @@ def _record(lead: Lead) -> dict:
         "richness": lead.richness_label or "",
         "intent": cls.intent_type.value if cls else "",
         "confidence": cls.confidence if cls else "",
+        "source": c.source,
         "name": c.name,
         "headline": (c.headline or "").replace("\n", " "),
         "company": c.company or "",

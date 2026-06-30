@@ -97,6 +97,35 @@ def test_deterministic_miner_over_demo_fixture(tmp_path=None):
     assert {r["richness"] for r in rows} >= {"thin", "rich"}, "richness scored without the LLM"
 
 
+def test_discover_stop_list_and_bait():
+    from intent.discover import bait_score, excluded_reason, matched_displaced_tools
+    assert excluded_reason("great staffing agency tips", "Recruiter") is not None
+    assert excluded_reason("how do you benchmark comp?", "Head of Total Rewards") is None
+    assert bait_score("comment below and I'll send you the bands template") >= 2
+    assert "radford" in matched_displaced_tools("ditching Radford for benchmarking")
+    assert matched_displaced_tools("our company values") == []  # whole-word, not 'compa'
+
+
+def test_icp_parity_with_scrape():
+    """intent/icp.py must behave byte-for-byte like scripts/scrape.py's ICP filter."""
+    import importlib
+
+    scripts_dir = os.path.join(os.path.dirname(__file__), "..", "scripts")
+    sys.path.insert(0, scripts_dir)
+    scrape = importlib.import_module("scrape")
+    from intent import icp
+
+    battery = [
+        "Head of Total Rewards at Acme", "VP People", "Chief People Officer",
+        "Compensation Analyst", "Director of Compensation", "Senior Manager, Compensation",
+        "Software Engineer", "Recruiter", "Student", "Account Executive", "Nurse",
+        "Founder & CEO", "Data Scientist", "Total Rewards Lead", "", "Designer",
+    ]
+    for t in battery:
+        assert icp.is_icp(t) == scrape.is_icp(t), f"is_icp parity broke on {t!r}"
+        assert icp.is_non_icp(t) == scrape.is_non_icp(t), f"is_non_icp parity broke on {t!r}"
+
+
 def _run_all():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_") and callable(v)]
     for fn in fns:

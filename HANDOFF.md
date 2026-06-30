@@ -26,5 +26,14 @@ routed to the owning rep. Each rep sees only their accounts.
 - A dead competitor page exists in the drop list — keep on drop list, don't scrape.
 - Fuzzy CRM name match 0.75-0.90 = human review, not auto-route. Nothing is written back to the CRM.
 
+## Intent miner (add-on)
+On top of the scrape there's now an intent layer (`intent/`, see `docs/intent-miner.md`):
+the comment text we already pull is classified into intent (`active_need`/`evaluating`/
+`curious`/`noise`) with a **verbatim evidence quote**, emitted to a separate
+`data/out/leads-<week>.csv`. Deterministic stages (verbatim gate, praise verify,
+richness) run with no creds; the LLM stages (post-type gate, classifier) light up when
+`ANTHROPIC_API_KEY` is set. The engagement/jobs tracks and the Master append are
+unchanged. No Slack, no Salesforce, no pipeline tracking; keeps the existing ICP filter.
+
 ## Before publishing
 Genericize any rep names, employer-specific competitor names, and account emails. Confirm `data/` has nothing committed.

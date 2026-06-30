@@ -412,6 +412,10 @@ def run_engagement(cfg, test):
             sk_co += 1
             continue
         hand_raiser = "Y" if (etype == "comment" and meta.get("bait")) else "N"
+        comment_text = ""
+        if etype == "comment":
+            comment_text = (it.get("commentary") or it.get("commentText")
+                            or it.get("text") or it.get("comment") or "")
         row = {
             "Engager Name": name, "Engager Company": company, "Title": headline,
             "Email": "", "Current Company": "",
@@ -420,6 +424,7 @@ def run_engagement(cfg, test):
             "Post Type": etype, "Hand Raiser": hand_raiser,
             "Post URL": meta.get("url") or it.get("linkedinUrl") or "", "Domain": "",
             "_url": a.get("linkedinUrl") or "",  # transient: engager profile URL for enrichment
+            "_comment_text": comment_text,       # transient: raw comment text for the intent miner
         }
         key = (norm(name), norm(headline)[:40], pid)
         prev = rows.get(key)
@@ -437,8 +442,12 @@ def run_engagement(cfg, test):
                     and not own_company_engager(r.get("Competitor", ""),
                                                 r.get("Current Company", ""), r.get("Engager Company", ""))]
         sk_co += before - len(out_rows)
+    # Hand the intent miner the comment text + post body the actor already returned
+    # (gitignored dump; the engagement CSV schema below is unchanged). See intent/run_miner.py.
+    _write_comments_dump(out_rows, {m["url"]: m["text"] for m in posts.values() if m.get("url")})
     for r in out_rows:
         r["Profile URL"] = r.pop("_url", "")   # persist engager profile URL for later re-enrichment
+        r.pop("_comment_text", None)           # transient: consumed by the comments dump above
 
     if review:
         _write_review(review)
@@ -462,6 +471,38 @@ def _write_review(review):
     existing += [r for r in review if r.get("post_url") not in seen]
     with open(path, "w") as f:
         json.dump({"posts": existing}, f, indent=2, ensure_ascii=False)
+
+
+def _write_comments_dump(rows, url_to_text):
+    """Write the comment text + post body for surfaced commenters to a gitignored dump
+    that the intent miner (intent/run_miner.py) consumes. Reuses what the company-posts
+    actor already returned — no extra Apify call. Reactions (no text) are skipped."""
+    from collections import OrderedDict
+    posts = OrderedDict()
+    for r in rows:
+        text = (r.get("_comment_text") or "").strip()
+        if not text:
+            continue
+        url = r.get("Post URL") or ""
+        p = posts.get(url)
+        if p is None:
+            p = {"post_url": url, "competitor": r.get("Competitor", ""),
+                 "post_text": url_to_text.get(url, ""), "comments": []}
+            posts[url] = p
+        p["comments"].append({
+            "name": r.get("Engager Name", ""),
+            "headline": r.get("Title", ""),
+            "company": r.get("Current Company") or r.get("Engager Company", ""),
+            "profile_url": r.get("_url", ""),
+            "comment_text": text,
+        })
+    out = {"week": date.today().strftime("%G-W%V"),
+           "generated": date.today().isoformat(), "posts": list(posts.values())}
+    fn = os.path.join(out_dir(), f"comments_{date.today().isoformat()}.json")
+    with open(fn, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=2, ensure_ascii=False)
+    n = sum(len(p["comments"]) for p in out["posts"])
+    print(f"engagement: wrote comments dump ({n} comment(s)) -> {fn}", file=sys.stderr)
 
 
 def enrich_current_company(rows):

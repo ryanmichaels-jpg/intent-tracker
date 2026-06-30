@@ -1,0 +1,36 @@
+{
+  "_comment": "The 'could Pave solve this?' map for the post-type gate. Non-sensitive domain knowledge (committed). DRAFT competitor sets from the transfer brief — operator to confirm. This is NOT the scrape target list (that lives in config/targets.json).",
+  "surfaces": {
+    "benchmarking": {
+      "what": "real-time market comp data / salary benchmarking",
+      "displaces": ["Radford", "Mercer", "Payscale", "CompAnalyst", "Willis Towers Watson", "Carta Total Comp", "Ravio", "Figures", "Barley", "Compa", "OpenComp", "Aeqium", "spreadsheets"],
+      "tool_keywords": ["radford", "mercer", "payscale", "companalyst", "willis towers watson", "carta total comp", "ravio", "figures", "barley", "compa", "opencomp", "aeqium"]
+    },
+    "comp_planning": {
+      "what": "merit / promotion / equity-refresh cycles",
+      "displaces": ["Excel/Sheets merit matrices", "Workday Comp", "Beqom"],
+      "tool_keywords": ["workday comp", "beqom"]
+    },
+    "pay_bands": {
+      "what": "salary band / range / job-architecture design",
+      "displaces": ["spreadsheets", "levels.fyi", "homegrown leveling"],
+      "tool_keywords": ["levels.fyi"]
+    },
+    "pay_equity": {
+      "what": "pay equity analysis & remediation",
+      "displaces": ["Syndio", "Trusaic", "manual regressions"],
+      "tool_keywords": ["syndio", "trusaic"]
+    },
+    "total_rewards": {
+      "what": "total-rewards statements & comp communication",
+      "displaces": ["spreadsheets", "custom TRS docs"],
+      "tool_keywords": []
+    },
+    "offers": {
+      "what": "offer & comp-letter generation, pay transparency",
+      "displaces": ["manual offer math", "spreadsheets"],
+      "tool_keywords": []
+    }
+  },
+  "not_pave": ["payroll processing", "ATS / recruiting", "performance reviews", "L&D", "generic HRIS"]
+}

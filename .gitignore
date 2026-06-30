@@ -23,6 +23,10 @@ config/review_candidates.json
 !config/watchlist.example.json
 !config/watchlist_candidates.example.json
 !config/review_candidates.example.json
+# Pave intent miner: capability map is non-sensitive config; synthetic demo fixtures
+# carry no real people — re-include both past the broad *.json rule.
+!config/pave_capabilities.json
+!intent/demo/*.json
 
 # OS / editor
 .DS_Store

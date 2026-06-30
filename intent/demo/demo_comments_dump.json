@@ -1,0 +1,49 @@
+{
+  "_comment": "SYNTHETIC fixture (no real people) to exercise the intent miner with zero credentials. Names/companies are invented.",
+  "week": "demo",
+  "generated": "demo",
+  "posts": [
+    {
+      "post_url": "https://www.linkedin.com/posts/candoriq_demo-activity-1",
+      "competitor": "CandorIQ",
+      "post_text": "Compensation is a company's biggest investment. Comment 'BANDS' and I'll send you our salary-band template.",
+      "comments": [
+        {
+          "name": "Dana Reyes",
+          "headline": "Head of Total Rewards at Northwind",
+          "company": "Northwind",
+          "profile_url": "https://www.linkedin.com/in/demo-dana",
+          "comment_text": "We're ripping out our Radford spreadsheet this quarter and need real-time benchmarking before merit cycle. What's everyone using instead?"
+        },
+        {
+          "name": "Sam Okafor",
+          "headline": "VP People at Brightwave",
+          "company": "Brightwave",
+          "profile_url": "https://www.linkedin.com/in/demo-sam",
+          "comment_text": "BANDS"
+        },
+        {
+          "name": "Priya Nair",
+          "headline": "Compensation Analyst at Cedar Labs",
+          "company": "Cedar Labs",
+          "profile_url": "https://www.linkedin.com/in/demo-priya",
+          "comment_text": "Love this! 🔥 great post"
+        }
+      ]
+    },
+    {
+      "post_url": "https://www.linkedin.com/posts/bettercomp_demo-activity-2",
+      "competitor": "BetterComp",
+      "post_text": "How are you all running your merit cycle this year — Workday Comp, Beqom, or spreadsheets?",
+      "comments": [
+        {
+          "name": "Alex Kim",
+          "headline": "Director of Compensation at Vela",
+          "company": "Vela",
+          "profile_url": "https://www.linkedin.com/in/demo-alex",
+          "comment_text": "Still on spreadsheets and it's painful — actively evaluating tools to replace our merit matrix. Would love a comparison."
+        }
+      ]
+    }
+  ]
+}

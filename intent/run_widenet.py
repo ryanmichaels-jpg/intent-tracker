@@ -40,28 +40,31 @@ def run_widenet(week: str, queries_cap: int = 5, max_posts: int = 8, cap_posts: 
                            use_google=use_google, cap=cap_posts)
 
     leads: list[Lead] = []
-    gated_out = Counter()
+    posts_gated = Counter()       # post-type gate (post-level)
+    comments_filtered = Counter()  # ICP / competitor filters (comment-level)
+    mined = 0
     for post in posts:
         pc = classify_post_live(post)
         if not pc.qualifies:  # untrusted source -> drop non-qualifying before spending more
-            gated_out[f"{pc.post_type.value}/{pc.pave_surface.value}"] += 1
+            posts_gated[f"{pc.post_type.value}/{pc.pave_surface.value}"] += 1
             continue
-        commenters = extract_for_post(post, max_items=comments_per_post)
-        for c in commenters:
+        mined += 1
+        for c in extract_for_post(post, max_items=comments_per_post):
             if not c.comment_text:
                 continue
             if not is_icp(c.headline or ""):   # same ICP filter as the scrape
+                comments_filtered["off_icp"] += 1
                 continue
             if is_competitor_employee(c.company, c.headline):  # vendor/own staff aren't buyers
-                gated_out["competitor_employee"] += 1
+                comments_filtered["competitor_employee"] += 1
                 continue
             leads.append(process_comment(c, pc, live=True))
 
     out_path = out_path or os.path.join(REPO, "data", "out", f"leads-widenet-{week}.csv")
     out_path, records = write_leads(leads, out_path)
     counts = Counter(r["decision"] for r in records)
-    print(f"[widenet] qualifying posts mined={len(posts) - sum(gated_out.values())} "
-          f"gated_out={dict(gated_out)} | leads={len(records)} decisions={dict(counts)}")
+    print(f"[widenet] discovered={len(posts)} mined={mined} posts_gated={dict(posts_gated)} | "
+          f"comments_filtered={dict(comments_filtered)} | leads={len(records)} decisions={dict(counts)}")
     print(f"[widenet] wrote {out_path}")
     return out_path
 

@@ -24,6 +24,7 @@
     "include_approved_watchlist": true,
     "enrich_current_company": true,
     "posted_limit": "week",
+    "posts_scan_per_target": 10,
     "posts_per_target": 5,
     "max_reactions_per_post": 10,
     "max_comments_per_post": 20
@@ -42,13 +43,21 @@
 
   "bait_discovery": {
     "_comment": "Track 3: find target creators posting engagement-bait, then human-approve them into the watchlist. Bait = comment/DM call-to-action PAIRED WITH a promised deliverable (regex in scrape.py: BAIT_CTA_RE + BAIT_DELIVERABLE_RE); hiring posts excluded.",
-    "post_search_actor": "harvestapi~linkedin-post-search",
     "target_terms": ["your-keyword-one", "your-keyword-two", "your-keyword-three"],
     "recency_days": 7,
     "min_engagement": 5,
     "min_bait_posts": 1,
     "max_posts_per_query": 20,
     "max_comments": 20
+  },
+
+  "pricing": {
+    "_comment": "OPTIONAL. HarvestAPI is pay-as-you-go; --estimate-only bills per returned result at these USD rates (no Apify platform margin). Defaults in scripts/scrape.py are $0.004/result; override any key to match your plan (harvestapi.io/pricing). Keys: post, reaction, comment, job, profile.",
+    "post": 0.004,
+    "reaction": 0.004,
+    "comment": 0.004,
+    "job": 0.004,
+    "profile": 0.004
   },
 
   "icp": {

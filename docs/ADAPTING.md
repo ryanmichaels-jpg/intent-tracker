@@ -7,7 +7,7 @@ market (e.g. an SDR at a dev-tools company targeting engineering leaders) mostly
 ## What you get vs. what you build
 
 **In this repo (the top half of `diagrams/pipeline-flow.html`):**
-- Two scrape tracks (LinkedIn engagement + job postings) and a self-growing bait-discovery loop, via Apify
+- Two scrape tracks (LinkedIn engagement + job postings) and a self-growing bait-discovery loop, via HarvestAPI's direct API
 - ICP gating, enrichment, hand-raiser flagging
 - Consolidate + dedupe + NEW/REPEAT (`ingest/normalize.py`)
 - Append to a Google Sheet `Master` tab (`ingest/upload_to_sheet.py`)
@@ -19,7 +19,7 @@ account by design (it needs CRM access and is kept off the scrape machine). The 
 last three columns blank for exactly this handoff.
 
 ## Prerequisites
-- An [Apify](https://apify.com) account + API token (uses the `harvestapi` LinkedIn actors)
+- A [HarvestAPI](https://harvestapi.io) account + API key (direct LinkedIn REST API)
 - A Google Cloud **service account** with the Sheets API enabled, and its JSON key
 - A Google Sheet you own, shared to the service account as Editor (external-share must be allowed)
 - Python 3.9+ and Drive-for-Desktop (or any folder sync) if you want the cross-machine drop
@@ -77,7 +77,7 @@ An engager is kept only if their enriched title matches `tier1` or `tier2` and i
 
 (JSON requires escaped backslashes: write `\\s`, `\\b`, `\\w` for the regex `\s`, `\b`, `\w`.)
 
-### Verify your ICP before a live run (free — no Apify spend)
+### Verify your ICP before a live run (free — no HarvestAPI spend)
 
 ```bash
 .venv/bin/python3 - <<'PY'

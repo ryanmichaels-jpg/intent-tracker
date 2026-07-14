@@ -92,7 +92,7 @@ data/        (gitignored) raw scrapes + outputs — never committed
 ```bash
 python3 -m venv .venv && .venv/bin/python3 -m pip install -r requirements.txt
 cp config/targets.example.json config/targets.json   # fill in your targets
-cp .env.example .env                                  # Apify token, sheet id, service-account key path
+cp .env.example .env                                  # HarvestAPI key, sheet id, service-account key path
 DRY_RUN=1 bash scripts/run_weekly_ingest.sh          # validate end-to-end, write nothing
 ```
 

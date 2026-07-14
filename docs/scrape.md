@@ -9,14 +9,27 @@ Driver: [`scripts/scrape.py`](../scripts/scrape.py). Targets: `config/targets.js
 
 ## Two tracks
 
-| Track | Apify actor | Produces |
-|---|---|---|
-| **Engagement** | `harvestapi/linkedin-company-posts` | People who reacted to / commented on competitor posts |
-| **Jobs** | `harvestapi/linkedin-job-search` | Companies hiring target roles (budget signal) |
+Both run on **HarvestAPI's direct REST API** (`https://api.harvest-api.com`, auth via the
+`X-API-Key` header, synchronous + paginated — no Apify actor runs, polling, or dataset
+downloads). All calls share the same `HARVEST_API_KEY`.
 
-Both accept the same `APIFY_API_TOKEN`. The engagement actor takes **company page URLs and
-exec profile URLs interchangeably** in one `targetUrls` array — per the PoC, named execs yield
-far better cost-per-ICP than company pages, so configure both and lean on execs.
+| Track | HarvestAPI endpoints | Produces |
+|---|---|---|
+| **Engagement** | `/linkedin/company-posts` + `/linkedin/profile-posts` (posts), then `/linkedin/post-reactions` + `/linkedin/post-comments` (engagers) | People who reacted to / commented on competitor posts |
+| **Jobs** | `/linkedin/job-search` | Companies hiring target roles (budget signal) |
+
+The engagement track mixes **company page URLs and exec profile URLs** in the config target
+list — per the PoC, named execs yield far better cost-per-ICP than company pages, so configure
+both and lean on execs. At runtime each target is routed by URL type: a `/company/…` URL hits
+`company-posts`, a profile URL hits `profile-posts`.
+
+**Split-then-rank (the cost win).** The old Apify actor bundled posts + reactions + comments in
+one run. The direct API splits them, so the scraper (a) fetches recent posts per target, (b)
+ranks them locally by engagement (likes + comments + shares), and (c) pulls reactions/comments
+**only for the top-N selected posts** — instead of scraping every engager on every post. Per-
+endpoint call counts are logged at the end of the run. Knobs: `posts_scan_per_target` (ranking
+pool, default `max(2·posts_per_target, 10)`) and `posts_per_target` (the top-N pulled for
+engagers).
 
 ## Inputs (`config/targets.json`)
 
@@ -53,7 +66,7 @@ Dropped before a row is written:
   employer matches the list is dropped — this covers self-engagement (a competitor's employee on
   that competitor's post), cross-competitor insiders, and our own employees engaging with our
   exec's posts. Matched by **exact normalized company name** (so "compa" won't match
-  "company"); checked on the headline-parsed company and again on the Apollo-enriched
+  "company"); checked on the headline-parsed company and again on the profile-enriched
   Current Company.
 - **Company-page engagers**: LinkedIn company pages sometimes appear as reactors/commenters
   (e.g. "Competitor One · 97,700 followers"). They're not people/leads, so they're skipped (actor
@@ -79,14 +92,29 @@ A target's feed can surface a post **authored by someone else** (a reshare). For
   **not** surfaced until you approve the author into `watchlist.json`.
 - **Not on-target** (0 terms) → dropped silently.
 
-### Verified actor shapes (from the smoke test)
+### Verified API response shapes (confirm against a live smoke test)
 
-The engagement actor (`harvestapi/linkedin-company-posts`) returns **flattened** records — one
-item per `post` / `reaction` / `comment` — with `actor` (the engager: `name`, `position`,
-`linkedinUrl`), post text in `content`, comment text in `commentary`, and `commentIds` /
-`reactionIds` on the post used to link engagers to their post (sidesteps the ugcPost/activity
-twin-id mismatch). The jobs actor (`harvestapi/linkedin-job-search`) takes `jobTitles` (array)
-+ `locations` (array); company is an object (`company.name`, `company.website`).
+Every list endpoint returns the standard envelope `{ elements: [...], pagination: { totalPages,
+pageNumber, pageSize, paginationToken, ... }, status, query }`; `/linkedin/profile` returns a
+single object under `element`. The scraper paginates by incrementing `page` and forwarding any
+`paginationToken`, stopping at `totalPages` or an empty page.
+
+- **Posts** (`company-posts` / `profile-posts`, param `company=` / `profile=`): each element has
+  `id`, `content` (post text), `linkedinUrl`, `author` (`{name, publicIdentifier, universalName,
+  linkedinUrl}`), and `engagement` (`{likes, comments, shares}`) — the local ranking key.
+- **Reactions** (`post-reactions`, param `post=`): `{ reactionType, postId, actor: {name,
+  position, linkedinUrl} }`. Note: `actor.linkedinUrl` comes back in profile-ID form
+  (`/in/ACoAA…`), not the public slug.
+- **Comments** (`post-comments`, param `post=`): `{ commentary (text), postId, actor: {name,
+  position, linkedinUrl, author} }`; comment `actor.linkedinUrl` is the public-slug form.
+- **Jobs** (`job-search`, params `search=` + `location=`): `{ title, url, postedDate, company:
+  {name, universalName, linkedinUrl}, location: {linkedinText} }`. **There is no company web
+  domain** in the job-search item (only the LinkedIn URL), so the `Domain` column stays blank for
+  the jobs track and the CRM match/route step resolves it by company name.
+
+Because reactions and comments are fetched **per selected post**, each engager's parent post is
+known by construction — no `commentIds`/`reactionIds` linking is needed (that sidestepped the
+old flattened-actor ugcPost/activity twin-id mismatch).
 
 ## Source-side dedupe (before the file is even written)
 
@@ -122,26 +150,24 @@ recognize, so the drop is ingested with no extra mapping. The five newer columns
 ## Current-company enrichment (engagement)
 
 `enrich_current_company()` runs when `engagement.enrich_current_company` is true (default). It
-collects each unique engager profile URL and bulk-scrapes them via
-**harvestapi/linkedin-profile-scraper** in `'Profile details no email ($4 per 1k)'` mode —
-reusing `APIFY_API_TOKEN` (no separate enrichment key/plan). It fills the real **Title**
-(`currentPosition[0].position` — not the noisy headline) and **Company**
-(`currentPosition[0].companyName`).
+looks up each unique engager profile via the direct **`/linkedin/profile`** endpoint (reusing
+`HARVEST_API_KEY`; no separate enrichment key/plan). It fills the real **Title**
+(`currentPosition[0].position`, falling back to `experience[0].position` — not the noisy
+headline) and **Company** (`currentPosition[0].companyName` / `experience[0].companyName`).
 
-- **Email is intentionally not fetched** (the cheaper no-email mode), so the `Email` column
-  stays blank. Switching to the `'+ email search ($10 per 1k)'` mode would populate it.
-- **Domain** is not populated by this step (the profile scraper exposes the company's
-  LinkedIn URL, not a web domain).
-- Cost ≈ $4 per 1,000 unique engagers (one actor run per 100 URLs). Set
-  `enrich_current_company: false` to skip.
-- (We previously tried Apollo People Match — it requires a paid plan, so we use the Apify
-  profile scraper instead.)
+- **Email is intentionally not fetched** (the `findEmail` option is left off), so the `Email`
+  column stays blank. Enabling it would populate the column at a higher per-profile rate.
+- **Domain** is not populated by this step (the profile exposes the company's LinkedIn URL, not
+  a web domain).
+- The direct API does **not batch** profile lookups, so this is **one GET per unique engager**
+  (results are cached by URL across rows). Set `enrich_current_company: false` to skip. The
+  per-run profile-lookup count is logged alongside the engagement API call counts.
 
 ## Track 3 — bait discovery + hand-raiser surfacing
 
-Driver: [`scripts/bait_discovery.py`](../scripts/bait_discovery.py) (actor
-`harvestapi/linkedin-post-search`); config under `bait_discovery` in `config/targets.json`.
-It searches target-term posts (with `scrapeComments`) and flags **bait posts** — defined as a
+Driver: [`scripts/bait_discovery.py`](../scripts/bait_discovery.py) (endpoint
+`/linkedin/post-search`); config under `bait_discovery` in `config/targets.json`.
+It searches target-term posts (text only) and flags **bait posts** — defined as a
 post containing **both** a comment/DM call-to-action **and** a promised deliverable
 (`BAIT_CTA_RE` + `BAIT_DELIVERABLE_RE` in `scrape.py`), e.g. *"comment GUIDE and I'll send you
 the template."* A standalone `👇` or the word "comment" is **not** bait. **Hiring posts are
@@ -158,9 +184,10 @@ excluded.** It then does **two** things:
    engagement scraper then harvests their audience going forward
    (`engagement.include_approved_watchlist`).
 
-**Two-pass for cost:** Pass 1 searches posts **without** comments (cheap, text only) and detects
-bait on the text; Pass 2 (`harvestapi/linkedin-post-comments`) scrapes comments **only on the
-few bait posts**. This avoids comment-scraping every searched post (the previous big spender).
+**Two-pass for cost:** Pass 1 searches posts via `/linkedin/post-search` (cheap, text only) and
+detects bait on the text; Pass 2 fetches comments via `/linkedin/post-comments` **only on the
+few bait posts** (one paginated query per post). This avoids comment-scraping every searched
+post (the previous big spender).
 
 **Reaching you:** `scripts/publish_review.py` writes both candidate lists to a **`Review` tab**
 in Comp_Intel_Ready each run (via the service account — sheet structure only, never Master/rep
@@ -195,9 +222,12 @@ python3 scripts/scrape.py                    # full run, both tracks
 python3 scripts/scrape.py --track jobs       # one track
 ```
 
-**Smoke test before trusting a full run.** The actors' exact output field names must be
-confirmed against a real dataset — `scrape.py` parses defensively, but run `--test` once with
-a real token + 1–2 targets and eyeball the CSVs before scheduling. Cost is ~$1–3/full run.
+**Smoke test before trusting a full run.** The endpoints' exact response field names must be
+confirmed against a real response — `scrape.py` parses defensively, but run `--test` once with a
+real `HARVEST_API_KEY` + 1–2 targets and eyeball the CSVs before scheduling. Use
+`--estimate-only` to project HarvestAPI credit spend first (per-result pricing, no Apify
+platform margin — confirm the rate for your plan at harvestapi.io/pricing and override it via a
+`pricing` block in `config/targets.json`).
 
 ## Cadence
 

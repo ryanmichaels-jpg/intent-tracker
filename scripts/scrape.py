@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """
-Weekly competitive-intent scrape (local machine). Two tracks via Apify harvestapi actors:
+Weekly competitive-intent scrape (local machine). Two tracks on HarvestAPI's DIRECT REST API
+(https://api.harvest-api.com — synchronous, paginated; no Apify actor runs/datasets):
 
-  engagement -> harvestapi/linkedin-company-posts  (reactors + commenters on competitor posts)
-  jobs       -> harvestapi/linkedin-job-search     (target-role hiring signals)
+  engagement -> /linkedin/company-posts + /linkedin/profile-posts  (posts per target),
+                then /linkedin/post-reactions + /linkedin/post-comments for the top-N posts
+                (reactors + commenters on competitor posts)
+  jobs       -> /linkedin/job-search                               (target-role hiring signals)
+
+The engagement track used to be one bundled actor run (posts + reactions + comments together);
+the direct API splits them, so we fetch posts per target, rank them locally by engagement, and
+pull reactions/comments ONLY for the selected top-N posts — cheaper than scraping everything.
 
 Output: normalize-ready CSVs dropped into the staging folder (COMP_INTEL_RAW_DIR, normally
 the local path of the Drive-for-Desktop 'comp-intel-raw' folder). The column
 headers are chosen to match ingest/normalize.py's ENGAGEMENT_MAP / JOB_MAP, so the files feed
-straight into the engine with no further mapping.
+straight into the engine with no further mapping. The CSV schema is unchanged from the Apify era.
 
 This script NEVER touches the CRM and NEVER writes to the sheet — it only produces raw files.
 It does NOT change the Master schema — it just populates the existing columns better and
@@ -21,7 +28,7 @@ Post Topic is a short themed label (Haiku fills the misses); Hand Raiser = comme
 bait post; engagers on a target exec's posts get that exec's Competitor label.
 
 Config: config/targets.json (gitignored; copy from config/targets.example.json).
-Secrets: APIFY_API_TOKEN (required), ANTHROPIC_API_KEY (optional, topic summarizer) — from .env.
+Secrets: HARVEST_API_KEY (required), ANTHROPIC_API_KEY (optional, topic summarizer) — from .env.
 
 Usage:
     python3 scripts/scrape.py --estimate-only          # offline cost estimate, no API calls
@@ -29,15 +36,33 @@ Usage:
     python3 scripts/scrape.py                           # full run, both tracks
     python3 scripts/scrape.py --track jobs              # one track only
 """
-import argparse, csv, json, os, re, sys, time, urllib.request, urllib.error
+import argparse, csv, json, os, re, sys, time, urllib.request, urllib.error, urllib.parse
 from datetime import date
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-APIFY_BASE = "https://api.apify.com/v2/acts"
-ENGAGEMENT_ACTOR = "harvestapi~linkedin-company-posts"
-JOBS_ACTOR = "harvestapi~linkedin-job-search"
-PROFILE_ACTOR = "harvestapi~linkedin-profile-scraper"
-PROFILE_MODE = "Profile details no email ($4 per 1k)"  # current company, no email
+
+# --- HarvestAPI direct REST API (https://docs.harvestapi.io) -----------------------------
+# Synchronous GET, auth via X-API-Key header, standard envelope {elements, pagination, ...}.
+HARVEST_BASE = "https://api.harvest-api.com"
+EP_COMPANY_POSTS = "/linkedin/company-posts"     # ?company=<url>  (or companyUniversalName)
+EP_PROFILE_POSTS = "/linkedin/profile-posts"     # ?profile=<url>  (exec / personal pages)
+EP_POST_REACTIONS = "/linkedin/post-reactions"   # ?post=<postUrl>
+EP_POST_COMMENTS = "/linkedin/post-comments"     # ?post=<postUrl>
+EP_JOB_SEARCH = "/linkedin/job-search"           # ?search=<title>&location=<loc>
+EP_PROFILE = "/linkedin/profile"                 # ?url=<profileUrl>  (single, no batching)
+EP_POST_SEARCH = "/linkedin/post-search"         # ?search=<term>  (used by bait_discovery)
+
+# Per-endpoint request counter — the split API makes call volume the cost driver, so we log it.
+CALL_COUNTS = {}
+
+# HarvestAPI is pay-as-you-go: you buy credits and each returned result consumes credits (no
+# per-run platform fee, unlike Apify's old 20% margin). The public list price is $4 / 1,000
+# profiles ($0.004 each); posts/reactions/comments/jobs are billed per returned result at a
+# similar rate. These are DEFAULTS for the offline --estimate-only projection only — confirm
+# the exact per-result credit cost for your plan at harvestapi.io/pricing and override via a
+# "pricing" block in config/targets.json (USD per returned result, keyed by result type).
+DEFAULT_PRICING = {"post": 0.004, "reaction": 0.004, "comment": 0.004,
+                   "job": 0.004, "profile": 0.004}
 
 # Headers must match ingest/normalize.py maps so the drop is normalize-ready.
 ENGAGEMENT_HEADER = ["Engager Name", "Engager Company", "Title", "Email", "Current Company",
@@ -162,30 +187,67 @@ def out_dir():
     return os.path.expanduser(d)
 
 
-def apify_run(actor, payload, attempts=3):
-    token = os.environ.get("APIFY_API_TOKEN")
-    if not token:
-        sys.exit("ERROR: APIFY_API_TOKEN not set (see .env).")
-    url = f"{APIFY_BASE}/{actor}/run-sync-get-dataset-items?token={token}"
+def harvest_get(endpoint, params, attempts=4):
+    """One GET against a HarvestAPI endpoint. Returns the parsed JSON envelope
+    ({elements, pagination, status, ...} for list endpoints; {element, ...} for /profile).
+    Counts the call per endpoint (cost/logging) and retries transient errors with backoff."""
+    key = os.environ.get("HARVEST_API_KEY")
+    if not key:
+        sys.exit("ERROR: HARVEST_API_KEY not set (see .env).")
+    CALL_COUNTS[endpoint] = CALL_COUNTS.get(endpoint, 0) + 1
+    qs = urllib.parse.urlencode({k: v for k, v in params.items()
+                                 if v not in (None, "", [])}, doseq=True)
+    url = f"{HARVEST_BASE}{endpoint}?{qs}"
     for i in range(attempts):
-        req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                     headers={"Content-Type": "application/json"})
+        req = urllib.request.Request(url, headers={"X-API-Key": key,
+                                                   "Accept": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=600) as r:
+            with urllib.request.urlopen(req, timeout=180) as r:
                 return json.loads(r.read().decode())
         except urllib.error.HTTPError as e:
             transient = e.code in (429, 500, 502, 503, 504)
             if transient and i < attempts - 1:
-                print(f"[apify] {actor} {e.code}, retrying ({i+1}/{attempts})…", file=sys.stderr)
-                time.sleep(5 * (i + 1))
+                print(f"[harvest] {endpoint} {e.code}, retrying ({i+1}/{attempts})…",
+                      file=sys.stderr)
+                time.sleep(2 ** i)
                 continue
-            sys.exit(f"ERROR: Apify {actor} returned {e.code}: {e.read().decode()[:300]}")
+            sys.exit(f"ERROR: HarvestAPI {endpoint} returned {e.code}: {e.read().decode()[:300]}")
         except urllib.error.URLError as e:
             if i < attempts - 1:
-                print(f"[apify] {actor} url error, retrying ({i+1}/{attempts})…", file=sys.stderr)
-                time.sleep(5 * (i + 1))
+                print(f"[harvest] {endpoint} url error, retrying ({i+1}/{attempts})…",
+                      file=sys.stderr)
+                time.sleep(2 ** i)
                 continue
-            sys.exit(f"ERROR: Apify {actor} url error: {e}")
+            sys.exit(f"ERROR: HarvestAPI {endpoint} url error: {e}")
+
+
+def harvest_paginate(endpoint, params, max_items=None):
+    """Walk a paginated list endpoint to exhaustion, yielding items from each page's `elements`.
+    Handles both the page-only endpoints (reactions, job-search) and the paginationToken ones
+    (posts, comments): we always increment `page` and forward any `paginationToken` the previous
+    page returned. Stops at totalPages, when a page returns no elements, or at max_items."""
+    page, token, out = 1, None, []
+    while True:
+        p = dict(params)
+        p["page"] = page
+        if token:
+            p["paginationToken"] = token
+        data = harvest_get(endpoint, p)
+        els = data.get("elements") or []
+        out.extend(els)
+        if max_items is not None and len(out) >= max_items:
+            return out[:max_items]
+        if not els:
+            break
+        pg = data.get("pagination") or {}
+        token = pg.get("paginationToken")
+        total = pg.get("totalPages")
+        if total is not None and page >= total:
+            break
+        if total is None and not token:  # no more pages advertised and no cursor -> done
+            break
+        page += 1
+    return out
 
 
 def parse_company(headline):
@@ -270,6 +332,29 @@ def _haiku_topic(text):
 
 # ----------------------------- engagement track -----------------------------
 
+def _slug_of(url):
+    """LinkedIn slug (company or profile) from a page URL: the segment after /company/ or /in/."""
+    m = re.search(r"/(?:company|in)/([^/?#]+)", url or "")
+    return m.group(1).lower() if m else ""
+
+
+def fetch_target_posts(url, posted_limit, scan):
+    """Fetch up to `scan` recent posts for one target via the direct API, choosing the endpoint by
+    URL type: /company/… -> company-posts (?company=), a profile URL -> profile-posts (?profile=).
+    Returns the raw `elements` (PostShort items)."""
+    if "/company/" in (url or ""):
+        return harvest_paginate(EP_COMPANY_POSTS,
+                                {"company": url, "postedLimit": posted_limit}, max_items=scan)
+    return harvest_paginate(EP_PROFILE_POSTS,
+                            {"profile": url, "postedLimit": posted_limit}, max_items=scan)
+
+
+def post_engagement_score(post):
+    """Local engagement rank key: likes + comments + shares from the post's `engagement` block."""
+    e = post.get("engagement") or {}
+    return sum(int(e.get(k) or 0) for k in ("likes", "comments", "shares"))
+
+
 def run_engagement(cfg, test):
     eng = cfg.get("engagement", {})
     drop = {norm(u) for u in eng.get("drop_list", [])}
@@ -288,87 +373,101 @@ def run_engagement(cfg, test):
     if not targets:
         print("engagement: no targets after drop-list; skipping", file=sys.stderr)
         return None
-    payload = {
-        "targetUrls": targets,
-        "postedLimit": eng.get("posted_limit", "week"),
-        "maxPosts": 3 if test else eng.get("posts_per_target", 5),
-        "scrapeReactions": True,
-        "scrapeComments": True,
-        "maxReactions": 15 if test else eng.get("max_reactions_per_post", 30),
-        "maxComments": 10 if test else eng.get("max_comments_per_post", 20),
-    }
-    items = apify_run(ENGAGEMENT_ACTOR, payload)
+
+    posted_limit = eng.get("posted_limit", "week")
+    top_n = 3 if test else eng.get("posts_per_target", 5)            # posts we pull engagers for
+    scan = 5 if test else eng.get("posts_scan_per_target", max(top_n * 2, 10))  # ranking pool
+    max_reactions = 15 if test else eng.get("max_reactions_per_post", 30)
+    max_comments = 10 if test else eng.get("max_comments_per_post", 20)
     target_terms = [t.lower() for t in cfg.get("bait_discovery", {}).get("target_terms", [])]
     topic_cache = {}
 
-    # Actor returns FLATTENED records (type in {post, reaction, comment}); `actor` = engager.
     slug_label = {}
     for url, label in labels.items():
-        m = re.search(r"/(?:company|in)/([^/?#]+)", url)
-        if m:
-            slug_label[m.group(1).lower()] = label
-
-    def competitor_from_url(url):
-        m = re.search(r"/posts/([^_/?#]+)_", url or "")  # /posts/<authorslug>_...
-        return slug_label.get(m.group(1).lower(), "") if m else ""
+        s = _slug_of(url)
+        if s:
+            slug_label[s] = label
 
     def topic_score(text):  # how strongly a post matches the target topic
         low = (text or "").lower()
         return sum(1 for t in target_terms if t in low)
 
-    # Pass 1: index posts. Link engagement ids (commentIds/reactionIds) -> post id (sidesteps
-    # the ugcPost/activity twin mismatch). Classify target vs non-target; for non-target
-    # posts: surface engagers if clearly on-target (>=2 terms), else send the post to the review list.
-    posts, eng_to_post, review = {}, {}, []
-    for it in items:
-        if it.get("type") != "post":
-            continue
-        pid = str(it.get("id"))
-        url = it.get("linkedinUrl") or ""
-        author = it.get("author") or {}
-        text = it.get("content") or ""
-        competitor = (competitor_from_url(url)
-                      or slug_label.get(str(author.get("universalName") or "").lower(), "")
-                      or slug_label.get(str(author.get("publicIdentifier") or "").lower(), ""))
-        surface = True
-        if not competitor:  # non-target author (e.g. a post a target reshared)
-            cs = topic_score(text)
-            if cs >= 2:
-                competitor = (author.get("name") or "") + " (discovered)"
-            elif cs == 1:
-                surface = False
-                review.append({"author": author.get("name") or "",
-                               "url": author.get("linkedinUrl") or "", "post_url": url,
-                               "target_terms_hit": cs, "sample": text[:200], "status": "review"})
-            else:
-                surface = False  # not on-target -> drop
-        posts[pid] = {"text": text, "competitor": competitor, "url": url, "surface": surface,
-                      "bait": is_bait(text),
-                      "topic": summarize_topic(text, topic_cache) if surface else ""}
-        for eid in (it.get("commentIds") or []) + (it.get("reactionIds") or []):
-            eng_to_post[str(eid)] = pid
+    def author_competitor(author):
+        """Competitor label for a post's author: a tracked target's slug -> its label; empty for
+        a non-target author (e.g. a reshared/original post surfaced in the target's feed)."""
+        for s in (str(author.get("publicIdentifier") or "").lower(),
+                  str(author.get("universalName") or "").lower(),
+                  _slug_of(author.get("linkedinUrl") or "")):
+            if s and s in slug_label:
+                return slug_label[s]
+        return ""
 
-    hiring_keys = {pid for pid, m in posts.items()
-                   if exclude_hiring and m["text"] and HIRING_RE.search(m["text"])}
+    # PASS 1 — per target, fetch & CLASSIFY posts, then rank by engagement and keep the top-N
+    # SURFACE-able, non-hiring posts. Reactions/comments are fetched only for those selected posts
+    # (the whole point of the split API: rank cheaply on post text, spend on engagers selectively).
+    posts, review = {}, []
+    n_scanned = 0
+    for turl in targets:
+        scanned = fetch_target_posts(turl, posted_limit, scan)
+        n_scanned += len(scanned)
+        ranked = sorted(scanned, key=post_engagement_score, reverse=True)
+        kept = 0
+        for it in ranked:
+            if kept >= top_n:
+                break
+            pid = str(it.get("id"))
+            if not pid or pid in posts:
+                continue
+            url = it.get("linkedinUrl") or ""
+            author = it.get("author") or {}
+            text = it.get("content") or ""
+            competitor = author_competitor(author)
+            surface = True
+            if not competitor:  # non-target author (e.g. a post a target reshared)
+                cs = topic_score(text)
+                if cs >= 2:
+                    competitor = (author.get("name") or "") + " (discovered)"
+                elif cs == 1:
+                    surface = False
+                    review.append({"author": author.get("name") or "",
+                                   "url": author.get("linkedinUrl") or "", "post_url": url,
+                                   "target_terms_hit": cs, "sample": text[:200], "status": "review"})
+                else:
+                    surface = False  # not on-target -> drop
+            hiring = bool(exclude_hiring and text and HIRING_RE.search(text))
+            posts[pid] = {"text": text, "competitor": competitor, "url": url, "surface": surface,
+                          "hiring": hiring, "bait": is_bait(text),
+                          "topic": summarize_topic(text, topic_cache) if surface else ""}
+            if surface and not hiring:
+                kept += 1  # only surface-able posts count toward the top-N engager budget
+
+    selected = [pid for pid, m in posts.items() if m["surface"] and not m["hiring"]]
+    sk_hire = sum(1 for m in posts.values() if m["hiring"])
+    sk_nontarget = sum(1 for m in posts.values() if not m["surface"])
 
     def is_company_actor(a):  # company pages sometimes appear as engagers — not leads
         return ("/company/" in (a.get("linkedinUrl") or "")
                 or bool(re.search(r"\d[\d,]*\s+followers", a.get("position") or "", re.I)))
 
+    # PASS 2 — for each SELECTED post, fetch reactions + comments (paginated to the cap) and build
+    # one flattened engagement event per engager, then apply the same ICP/dedupe/hand-raiser logic.
+    events = []
+    for pid in selected:
+        purl = posts[pid]["url"]
+        if not purl:
+            continue
+        for r in harvest_paginate(EP_POST_REACTIONS, {"post": purl}, max_items=max_reactions):
+            events.append({"type": "reaction", "pid": pid, "actor": r.get("actor") or {}})
+        for c in harvest_paginate(EP_POST_COMMENTS, {"post": purl}, max_items=max_comments):
+            events.append({"type": "comment", "pid": pid, "actor": c.get("actor") or {},
+                           "commentary": c.get("commentary") or ""})
+
     rows = {}
-    sk_hire = sk_co = sk_page = sk_icp = sk_nontarget = 0
-    for it in items:
-        etype = it.get("type")
-        if etype not in ("reaction", "comment"):
-            continue
-        pid = eng_to_post.get(str(it.get("id"))) or str(it.get("postId"))
+    sk_co = sk_page = sk_icp = 0
+    for it in events:
+        etype = it["type"]
+        pid = it["pid"]
         meta = posts.get(pid, {})
-        if not meta.get("surface", True):
-            sk_nontarget += 1
-            continue
-        if pid in hiring_keys:
-            sk_hire += 1
-            continue
         a = it.get("actor") or {}
         name = a.get("name") or a.get("fullName") or ""
         headline = a.get("position") or a.get("headline") or a.get("occupation") or ""
@@ -389,7 +488,7 @@ def run_engagement(cfg, test):
             "Competitor": meta.get("competitor", ""),
             "Competitor Post Topic": meta.get("topic", ""),
             "Post Type": etype, "Hand Raiser": hand_raiser,
-            "Post URL": meta.get("url") or it.get("linkedinUrl") or "", "Domain": "",
+            "Post URL": meta.get("url") or "", "Domain": "",
             "_url": a.get("linkedinUrl") or "",  # transient: engager profile URL for enrichment
         }
         key = (norm(name), norm(headline)[:40], pid)
@@ -413,9 +512,14 @@ def run_engagement(cfg, test):
 
     if review:
         _write_review(review)
-    print(f"engagement: kept {len(out_rows)} | skipped hiring={sk_hire} competitor={sk_co} "
+    print(f"engagement: kept {len(out_rows)} | scanned {n_scanned} posts, "
+          f"selected {len(selected)} for engagers | skipped hiring={sk_hire} competitor={sk_co} "
           f"pages={sk_page} non-ICP={sk_icp} non-target={sk_nontarget} | review={len(review)}",
           file=sys.stderr)
+    print("engagement: API calls -> " + " ".join(
+        f"{ep.rsplit('/', 1)[-1]}={CALL_COUNTS.get(ep, 0)}"
+        for ep in (EP_COMPANY_POSTS, EP_PROFILE_POSTS, EP_POST_REACTIONS,
+                   EP_POST_COMMENTS, EP_PROFILE)), file=sys.stderr)
     return write_csv("engagement", ENGAGEMENT_HEADER, out_rows)
 
 
@@ -436,52 +540,34 @@ def _write_review(review):
 
 
 def enrich_current_company(rows):
-    """Fill the real **Title** + **Company** by bulk-scraping each unique engager profile URL
-    via harvestapi/linkedin-profile-scraper ('no email' mode, $4/1k — reuses APIFY_API_TOKEN).
-    Uses currentPosition[0].position (actual job title, not the noisy headline) and .companyName.
-    Email is intentionally NOT fetched. One actor run per chunk of URLs."""
-    urls = sorted({r.get("_url", "") for r in rows if r.get("_url", "")})
-    if not urls:
-        return rows
-    info_by = {}  # key -> {"company":..., "title":...}
-
-    def nurl(u):  # normalize for matching
+    """Fill the real **Title** + **Company** by looking up each unique engager profile via the
+    direct /linkedin/profile endpoint. It fills the actual current job title
+    (currentPosition[0].position, falling back to experience[0].position) and current company
+    (currentPosition[0].companyName / experience[0].companyName) — not the noisy headline.
+    Email is intentionally NOT fetched (findEmail is left off). One GET per unique engager URL
+    (the direct API does not batch), so results are cached by URL across rows."""
+    def nurl(u):  # normalize for matching / caching
         return (u or "").split("?")[0].rstrip("/").lower()
 
-    def pid_of(u):
-        m = re.search(r"/in/([^/?#]+)", u or "")
-        return m.group(1).lower() if m else ""
-
-    def url_keys(p):
-        keys = []
-        for cand in (p.get("originalQuery"), p.get("linkedinUrl")):
-            if isinstance(cand, str):
-                keys.append(cand)
-            elif isinstance(cand, dict):  # originalQuery is an object echoing the input
-                for vk in ("url", "linkedinUrl", "profileUrl", "query"):
-                    if isinstance(cand.get(vk), str):
-                        keys.append(cand[vk])
-        return keys
-
-    CHUNK = 100
-    for i in range(0, len(urls), CHUNK):
-        items = apify_run(PROFILE_ACTOR,
-                          {"urls": urls[i:i + CHUNK], "profileScraperMode": PROFILE_MODE})
-        for p in items:
-            cp = p.get("currentPosition") or p.get("experience") or []
-            cp0 = cp[0] if cp and isinstance(cp[0], dict) else {}
-            info = {"company": cp0.get("companyName") or "", "title": cp0.get("position") or ""}
-            if not (info["company"] or info["title"]):
-                continue
-            for k in url_keys(p):
-                info_by[nurl(k)] = info
-            if p.get("publicIdentifier"):
-                info_by["pid:" + p["publicIdentifier"].lower()] = info
+    urls = sorted({nurl(r.get("_url", "")) for r in rows if r.get("_url", "")})
+    if not urls:
+        return rows
+    info_by = {}  # nurl -> {"company":..., "title":...}
+    for u in urls:
+        data = harvest_get(EP_PROFILE, {"url": u})
+        p = data.get("element") or {}
+        cp = p.get("currentPosition") or []
+        exp = p.get("experience") or []
+        cp0 = cp[0] if cp and isinstance(cp[0], dict) else {}
+        exp0 = exp[0] if exp and isinstance(exp[0], dict) else {}
+        info_by[u] = {
+            "company": cp0.get("companyName") or exp0.get("companyName") or "",
+            "title": cp0.get("position") or exp0.get("position") or "",
+        }
 
     filled = 0
     for r in rows:
-        u = r.get("_url", "")
-        info = info_by.get(nurl(u)) or info_by.get("pid:" + pid_of(u))
+        info = info_by.get(nurl(r.get("_url", "")))
         if not info:
             continue
         if info["company"]:
@@ -490,7 +576,8 @@ def enrich_current_company(rows):
             filled += 1
         if info["title"]:
             r["Title"] = info["title"]               # real job title, not the headline
-    print(f"enrichment: company/title filled for {filled}/{len(rows)} engager(s)", file=sys.stderr)
+    print(f"enrichment: company/title filled for {filled}/{len(rows)} engager(s) "
+          f"({len(urls)} profile lookups)", file=sys.stderr)
     return rows
 
 
@@ -510,43 +597,51 @@ def run_jobs(cfg, test):
     excl_co = ({norm(x) for x in cfg.get("engagement", {}).get("exclude_engager_companies", [])}
                if jobs.get("exclude_competitor_companies", True) else set())
     max_per = 5 if test else jobs.get("max_per_title", 25)
+    posted_limit = jobs.get("posted_limit", "week")
 
     # One row per posting. Same posting surfaced by multiple title-searches is deduped by
     # (company, role, url); two genuinely-distinct postings of the same role -> separate rows.
+    # The direct job-search endpoint takes ONE title + ONE location per query, so we loop the
+    # title x location grid and paginate each to `max_per`.
     out_rows, seen = [], set()
     fetched = dropped_rel = dropped_title = dropped_co = 0
     for title in titles:
-        payload = {"jobTitles": [title], "locations": locations,
-                   "maxItems": max_per, "postedLimit": jobs.get("posted_limit", "week")}
-        for job in apify_run(JOBS_ACTOR, payload):
-            fetched += 1
-            jt = job.get("title") or ""
-            jt_n = match_norm(jt)
-            if rel and not any(k and k in jt_n for k in rel):
-                dropped_rel += 1
-                continue
-            if excl_titles and any(k and k in jt_n for k in excl_titles):  # sales, clinical, legal, etc.
-                dropped_title += 1
-                continue
-            co = job.get("company")
-            company = (co.get("name") if isinstance(co, dict) else co) or ""
-            website = co.get("website") if isinstance(co, dict) else ""
-            if not company:
-                continue
-            if is_excluded_company(company, excl_co):  # competitor hiring — not a buyer
-                dropped_co += 1
-                continue
-            url = job.get("linkedinUrl") or job.get("url") or ""
-            key = (norm(company), norm(jt), url)
-            if key in seen:
-                continue
-            seen.add(key)
-            out_rows.append({"Company": company, "Domain": domain_from(website or ""),
-                             "Signal": "target-role hiring",
-                             "Job Titles": jt, "Post URL": url})
-    print(f"jobs: {len(out_rows)} posting(s) kept | {fetched} fetched from actor; dropped "
-          f"{dropped_rel} off-topic, {dropped_title} excluded-title, {dropped_co} competitor",
-          file=sys.stderr)
+        for location in locations:
+            for job in harvest_paginate(EP_JOB_SEARCH,
+                                        {"search": title, "location": location,
+                                         "postedLimit": posted_limit}, max_items=max_per):
+                fetched += 1
+                jt = job.get("title") or ""
+                jt_n = match_norm(jt)
+                if rel and not any(k and k in jt_n for k in rel):
+                    dropped_rel += 1
+                    continue
+                if excl_titles and any(k and k in jt_n for k in excl_titles):  # sales, clinical, ...
+                    dropped_title += 1
+                    continue
+                co = job.get("company")
+                company = (co.get("name") if isinstance(co, dict) else co) or ""
+                # The job-search item does NOT expose a company web domain (only name /
+                # universalName / linkedinUrl), so Domain stays blank for the jobs track and the
+                # CRM match/route step resolves it by company name. (`website` is read defensively
+                # in case a future response includes it.)
+                website = co.get("website") if isinstance(co, dict) else ""
+                if not company:
+                    continue
+                if is_excluded_company(company, excl_co):  # competitor hiring — not a buyer
+                    dropped_co += 1
+                    continue
+                url = job.get("url") or job.get("linkedinUrl") or ""
+                key = (norm(company), norm(jt), url)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out_rows.append({"Company": company, "Domain": domain_from(website or ""),
+                                 "Signal": "target-role hiring",
+                                 "Job Titles": jt, "Post URL": url})
+    print(f"jobs: {len(out_rows)} posting(s) kept | {fetched} fetched from API; dropped "
+          f"{dropped_rel} off-topic, {dropped_title} excluded-title, {dropped_co} competitor "
+          f"| job-search calls={CALL_COUNTS.get(EP_JOB_SEARCH, 0)}", file=sys.stderr)
     return write_csv("jobs", JOBS_HEADER, out_rows)
 
 
@@ -568,21 +663,39 @@ def write_csv(track, header, rows):
 
 
 def estimate(cfg):
+    """Offline UPPER-BOUND projection of HarvestAPI credit spend (no API calls). Bills per
+    returned result at the direct-API pay-as-you-go rate (no Apify platform margin). Actual spend
+    is lower — ICP/dedupe filtering trims engager and profile-lookup counts, and targets often
+    have fewer posts/engagers than the caps."""
+    price = {**DEFAULT_PRICING, **{k: v for k, v in (cfg.get("pricing") or {}).items()
+                                   if isinstance(v, (int, float))}}
     eng = cfg.get("engagement", {})
     n_targets = len(eng.get("competitor_company_urls", []) + eng.get("competitor_exec_urls", []))
-    posts = eng.get("posts_per_target", 5)
+    top_n = eng.get("posts_per_target", 5)
+    scan = eng.get("posts_scan_per_target", max(top_n * 2, 10))
     react = eng.get("max_reactions_per_post", 30)
     comm = eng.get("max_comments_per_post", 20)
-    eng_events = n_targets * posts * (react + comm)
+    posts = n_targets * scan                      # posts fetched for ranking
+    selected = n_targets * top_n                  # posts we pull engagers for
+    reactions = selected * react
+    comments = selected * comm
+    profiles = (reactions + comments) if eng.get("enrich_current_company", True) else 0
+
     jobs = cfg.get("jobs", {})
-    job_events = len(jobs.get("titles", [])) * len(jobs.get("locations", ["United States"])) \
+    job_results = len(jobs.get("titles", [])) * len(jobs.get("locations", ["United States"])) \
         * jobs.get("max_per_title", 25)
-    # harvestapi pay-per-event ~ $0.001/event + 20% platform fee (see skill docs).
-    cost = (eng_events + job_events) * 0.001 * 1.2
-    print(f"[estimate] engagement: {n_targets} targets x {posts} posts x ~{react+comm} engagers "
-          f"= ~{eng_events} events")
-    print(f"[estimate] jobs: ~{job_events} job results")
-    print(f"[estimate] approx Apify cost: ${cost:.2f} (rough; confirm in console.apify.com/billing)")
+
+    eng_cost = (posts * price["post"] + reactions * price["reaction"]
+                + comments * price["comment"] + profiles * price["profile"])
+    job_cost = job_results * price["job"]
+    print(f"[estimate] engagement: {n_targets} targets -> ~{posts} posts scanned, "
+          f"~{selected} selected x ({react} reactions + {comm} comments) = "
+          f"~{reactions + comments} engagers; ~{profiles} profile lookups")
+    print(f"[estimate] jobs: ~{job_results} job results")
+    print(f"[estimate] projected HarvestAPI cost (upper bound): "
+          f"engagement ${eng_cost:.2f} + jobs ${job_cost:.2f} = ${eng_cost + job_cost:.2f}")
+    print(f"[estimate] rate: ${price['post']:.4f}/result (confirm your plan at "
+          f"harvestapi.io/pricing; override via a \"pricing\" block in config/targets.json)")
 
 
 def main():

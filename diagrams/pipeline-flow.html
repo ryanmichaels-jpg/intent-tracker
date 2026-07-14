@@ -187,7 +187,7 @@
       <div class="track">
         <div class="track-title">Engagement track</div>
 
-        <div class="node processing" data-id="eng1" data-tip="Apify competitor-post-engagers: pulls recent posts from competitor company pages, target execs, and the approved creator watchlist (last 7 days, top posts).">
+        <div class="node processing" data-id="eng1" data-tip="HarvestAPI company-posts / profile-posts: pulls recent posts from competitor company pages, target execs, and the approved creator watchlist (last 7 days), then ranks by engagement and fetches reactions/comments for the top-N posts.">
           <div class="role">Processing</div>
           <div class="label">Pull competitor posts</div>
           <div class="sub">competitor-post-engagers · 7d · incl. watchlist</div>
@@ -256,7 +256,7 @@
       <div class="track">
         <div class="track-title">Bait-discovery loop</div>
 
-        <div class="node processing" data-id="dis1" data-tip="Apify linkedin-post-search, run weekly across target keywords. Two-pass and cost-optimized.">
+        <div class="node processing" data-id="dis1" data-tip="HarvestAPI post-search, run weekly across target keywords. Two-pass and cost-optimized.">
           <div class="role">Processing</div>
           <div class="label">Discovery: post-search</div>
           <div class="sub">target keywords · two-pass · weekly</div>
@@ -338,14 +338,14 @@
       <div class="track">
         <div class="track-title">Job-posting track</div>
 
-        <div class="node processing" data-id="job1" data-tip="Apify linkedin-job-search for hiring intent, run weekly.">
+        <div class="node processing" data-id="job1" data-tip="HarvestAPI job-search for hiring intent, run weekly.">
           <div class="role">Processing</div>
           <div class="label">Jobs: run search</div>
           <div class="sub">job-posting-intent · weekly</div>
         </div>
         <div class="av" data-from="job1" data-to="cost"></div>
 
-        <div class="node cost" data-id="cost" data-tip="Estimate-only cost pass confirms expected Apify spend before any live job scraping.">
+        <div class="node cost" data-id="cost" data-tip="Estimate-only cost pass confirms expected HarvestAPI credit spend before any live job scraping.">
           <div class="role">Cost Gate</div>
           <div class="label">Estimate cost first</div>
           <div class="sub">--estimate-only · confirm spend</div>

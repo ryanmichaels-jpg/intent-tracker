@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Weekly competitive-intent pipeline (deterministic, no LLM). Runs on THIS scrape machine:
-#   1. scrape   -> normalize-ready raw CSVs in the staging folder   (skipped if no APIFY token)
+#   1. scrape   -> normalize-ready raw CSVs in the staging folder   (skipped if no HARVEST key)
 #   2. ingest   -> consolidate + dedupe + normalize + NEW/REPEAT -> data/out/append-<week>.csv
 #   3. upload   -> append the batch to the Master tab via service account (never fills CRM cols)
 #   4. archive  -> move consumed raw files out of staging (transient "consume and clear")
@@ -12,7 +12,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-# Load .env if present (APIFY_API_TOKEN, COMP_INTEL_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_FILE, ...)
+# Load .env if present (HARVEST_API_KEY, COMP_INTEL_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_FILE, ...)
 set -a; [ -f .env ] && . ./.env; set +a
 
 # Prefer the project venv (has the Google client); fall back to system python3.
@@ -29,7 +29,7 @@ mkdir -p data/out "$RAW_DIR"
 
 echo "[$(date)] weekly ingest start (week=$WEEK, dry_run=$DRY_RUN, raw_dir=$RAW_DIR)"
 
-# Idempotency: skip (before any Apify spend) if this ISO week was already ingested — e.g. an
+# Idempotency: skip (before any HarvestAPI spend) if this ISO week was already ingested — e.g. an
 # extra Sunday fire the same week. The marker is written only after a successful real append.
 # Override with FORCE=1. (Dry runs never write the marker and never skip.)
 MARKER="data/out/.ingested-${WEEK}"
@@ -41,7 +41,7 @@ fi
 # 0) BAIT DISCOVERY (Track 3) -------------------------------------------------
 # Refreshes config/watchlist_candidates.json for async human review. Candidates do NOT
 # auto-feed this run — only the already-approved watchlist does. Non-fatal; skip with SKIP_BAIT=1.
-if [ -n "${APIFY_API_TOKEN:-}" ] && [ "$DRY_RUN" != "1" ] && [ "${SKIP_BAIT:-0}" != "1" ]; then
+if [ -n "${HARVEST_API_KEY:-}" ] && [ "$DRY_RUN" != "1" ] && [ "${SKIP_BAIT:-0}" != "1" ]; then
   echo "[bait] discovering candidates"
   "$PYBIN" scripts/bait_discovery.py || echo "[bait] discovery failed (non-fatal)"
 else
@@ -49,7 +49,7 @@ else
 fi
 
 # 1) SCRAPE -------------------------------------------------------------------
-if [ -n "${APIFY_API_TOKEN:-}" ]; then
+if [ -n "${HARVEST_API_KEY:-}" ]; then
   if [ "$DRY_RUN" = "1" ]; then
     echo "[scrape] dry run -> estimate only"
     "$PYBIN" scripts/scrape.py --estimate-only || echo "[scrape] estimate failed (non-fatal in dry run)"
@@ -58,7 +58,7 @@ if [ -n "${APIFY_API_TOKEN:-}" ]; then
     "$PYBIN" scripts/scrape.py
   fi
 else
-  echo "[scrape] APIFY_API_TOKEN unset — skipping scrape, ingesting whatever is already staged"
+  echo "[scrape] HARVEST_API_KEY unset — skipping scrape, ingesting whatever is already staged"
 fi
 
 # 2) INGEST -------------------------------------------------------------------

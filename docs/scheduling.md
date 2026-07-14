@@ -8,7 +8,7 @@ finishes, so the raw files exist before the ingest reads them.
 ## What the runner does
 
 1. **Scrape** (`scripts/scrape.py`) → normalize-ready CSVs in the staging folder. Skipped if
-   `APIFY_API_TOKEN` is unset (then it just ingests whatever is already staged).
+   `HARVEST_API_KEY` is unset (then it just ingests whatever is already staged).
 2. **Ingest** (`ingest/normalize.py`) → `data/out/append-<week>.csv` (dedupe + NEW/REPEAT).
 3. **Upload** (`ingest/upload_to_sheet.py`) → append the batch to the `Master` tab via the
    service account. CRM columns stay blank.

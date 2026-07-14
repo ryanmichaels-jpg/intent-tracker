@@ -598,6 +598,7 @@ def run_jobs(cfg, test):
                if jobs.get("exclude_competitor_companies", True) else set())
     max_per = 5 if test else jobs.get("max_per_title", 25)
     posted_limit = jobs.get("posted_limit", "week")
+    sort_by = jobs.get("sort_by", "date")   # 'date' (freshest first) or 'relevance'
 
     # One row per posting. Same posting surfaced by multiple title-searches is deduped by
     # (company, role, url); two genuinely-distinct postings of the same role -> separate rows.
@@ -609,7 +610,8 @@ def run_jobs(cfg, test):
         for location in locations:
             for job in harvest_paginate(EP_JOB_SEARCH,
                                         {"search": title, "location": location,
-                                         "postedLimit": posted_limit}, max_items=max_per):
+                                         "postedLimit": posted_limit, "sortBy": sort_by},
+                                        max_items=max_per):
                 fetched += 1
                 jt = job.get("title") or ""
                 jt_n = match_norm(jt)

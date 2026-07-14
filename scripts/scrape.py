@@ -520,7 +520,8 @@ def run_engagement(cfg, test):
             "Competitor Post Topic": meta.get("topic", ""),
             "Post Type": etype, "Hand Raiser": hand_raiser,
             "Post URL": meta.get("url") or "", "Domain": "",
-            "_url": a.get("linkedinUrl") or "",  # transient: engager profile URL for enrichment
+            "_url": a.get("linkedinUrl") or "",  # transient: engager profile URL (also Profile URL)
+            "_pid": a.get("id") or "",           # transient: profile ID for /linkedin/profile lookup
         }
         key = (norm(name), norm(headline)[:40], pid)
         prev = rows.get(key)
@@ -540,6 +541,7 @@ def run_engagement(cfg, test):
         sk_co += before - len(out_rows)
     for r in out_rows:
         r["Profile URL"] = r.pop("_url", "")   # persist engager profile URL for later re-enrichment
+        r.pop("_pid", None)                    # drop transient profile-id (not a CSV column)
 
     if review:
         _write_review(review)
@@ -575,30 +577,45 @@ def enrich_current_company(rows):
     direct /linkedin/profile endpoint. It fills the actual current job title
     (currentPosition[0].position, falling back to experience[0].position) and current company
     (currentPosition[0].companyName / experience[0].companyName) — not the noisy headline.
-    Email is intentionally NOT fetched (findEmail is left off). One GET per unique engager URL
-    (the direct API does not batch), so results are cached by URL across rows."""
-    def nurl(u):  # normalize for matching / caching
+    Email is intentionally NOT fetched (findEmail is left off). One GET per unique engager (the
+    direct API does not batch), cached across rows.
+
+    Reaction engagers come back as opaque `/in/ACoAA…` session URLs that /linkedin/profile can't
+    resolve by `url`, so we look up by **profileId** (the reaction/comment `actor.id`) when we have
+    it — HarvestAPI's documented way to resolve a reaction actor — and fall back to `url` only when
+    there's no id."""
+    def nurl(u):  # normalize a profile URL for matching / caching
         return (u or "").split("?")[0].rstrip("/").lower()
 
-    urls = sorted({nurl(r.get("_url", "")) for r in rows if r.get("_url", "")})
-    if not urls:
+    def keyof(r):  # prefer profile id (resolves ACoAA reactions); else the normalized URL
+        pid = (r.get("_pid") or "").strip()
+        return ("id:" + pid) if pid else ("url:" + nurl(r.get("_url", "")))
+
+    keys = {}  # cache-key -> the lookup params for /linkedin/profile
+    for r in rows:
+        k = keyof(r)
+        if k == "url:" or k in keys:
+            continue
+        keys[k] = {"profileId": r["_pid"]} if k.startswith("id:") else {"url": nurl(r.get("_url", ""))}
+    if not keys:
         return rows
-    info_by = {}  # nurl -> {"company":..., "title":...}
-    for u in urls:
-        data = harvest_get(EP_PROFILE, {"url": u})
+
+    info_by = {}  # cache-key -> {"company":..., "title":...}
+    for k, params in keys.items():
+        data = harvest_get(EP_PROFILE, params)
         p = data.get("element") or {}
         cp = p.get("currentPosition") or []
         exp = p.get("experience") or []
         cp0 = cp[0] if cp and isinstance(cp[0], dict) else {}
         exp0 = exp[0] if exp and isinstance(exp[0], dict) else {}
-        info_by[u] = {
+        info_by[k] = {
             "company": cp0.get("companyName") or exp0.get("companyName") or "",
             "title": cp0.get("position") or exp0.get("position") or "",
         }
 
     filled = 0
     for r in rows:
-        info = info_by.get(nurl(r.get("_url", "")))
+        info = info_by.get(keyof(r))
         if not info:
             continue
         if info["company"]:
@@ -608,7 +625,7 @@ def enrich_current_company(rows):
         if info["title"]:
             r["Title"] = info["title"]               # real job title, not the headline
     print(f"enrichment: company/title filled for {filled}/{len(rows)} engager(s) "
-          f"({len(urls)} profile lookups)", file=sys.stderr)
+          f"({len(keys)} profile lookups)", file=sys.stderr)
     return rows
 
 

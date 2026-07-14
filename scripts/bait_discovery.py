@@ -122,7 +122,8 @@ def main():
                 "Competitor": (meta["author"] + " (bait)") if meta["author"] else "(bait)",
                 "Competitor Post Topic": meta["topic"], "Post Type": "comment",
                 "Hand Raiser": "Y", "Post URL": meta["url"], "Domain": "",
-                "_url": (ac.get("linkedinUrl") or "").split("?")[0]}
+                "_url": (ac.get("linkedinUrl") or "").split("?")[0],
+                "_pid": ac.get("id") or ""}
 
     out_rows = list(rows.values())
     if out_rows:
@@ -130,6 +131,7 @@ def main():
         out_rows = [r for r in out_rows if scrape.is_icp(r["Title"])]  # positive Tier-1/2 gate
         for r in out_rows:
             r["Profile URL"] = r.pop("_url", "")   # persist engager profile URL for re-enrichment
+            r.pop("_pid", None)                    # drop transient profile-id (not a CSV column)
         scrape.write_csv("bait_engagement", scrape.ENGAGEMENT_HEADER, out_rows)
     else:
         print("bait: no hand-raiser commenters surfaced this run", file=sys.stderr)

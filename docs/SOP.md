@@ -1,5 +1,9 @@
 # Weekly run SOP
 
+> **Operating the scrape?** See **[`docs/RUNBOOK.md`](RUNBOOK.md)** — the standardized weekly
+> command, the frozen/validated config + ICP filters, the QA loop, scheduling, and cost. This
+> SOP covers the ingest + sheet + CRM-route roles around it.
+
 ## Three roles
 - **Scrape** (scrape machine): run the engagement + job-posting scrapes; raw CSV/JSON land in the synced `comp-intel-raw` drive folder.
 - **Ingest** (automation account, no CRM): consolidate → dedupe → normalize → tag NEW vs REPEAT → append a dated batch to the `Master` tab.

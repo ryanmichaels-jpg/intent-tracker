@@ -215,12 +215,18 @@ files (real names) are gitignored, with `*.example.json` templates committed.
 
 ## Running it
 
+For the standardized weekly procedure (frozen config, QA loop, scheduling, cost) see
+**[`docs/RUNBOOK.md`](RUNBOOK.md)**. Commands:
+
 ```bash
 python3 scripts/scrape.py --estimate-only   # offline cost estimate (no API calls)
-python3 scripts/scrape.py --test            # small caps, LIVE — smoke test first!
-python3 scripts/scrape.py                    # full run, both tracks
+python3 scripts/scrape.py --test --audit    # small caps, LIVE — smoke test + drop-audit first!
+python3 scripts/scrape.py --audit            # full run, both tracks, with drop-audit
 python3 scripts/scrape.py --track jobs       # one track
 ```
+
+`--audit` additionally writes `data/raw/_audit/<track>_<date>.csv` — every dropped row + reason,
+for checking the filters (false negatives). It's in a subdirectory the ingest never reads.
 
 **Smoke test before trusting a full run.** The endpoints' exact response field names must be
 confirmed against a real response — `scrape.py` parses defensively, but run `--test` once with a

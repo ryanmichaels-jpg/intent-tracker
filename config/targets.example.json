@@ -1,49 +1,51 @@
 {
-  "_comment": "Copy to config/targets.json (gitignored) and fill with REAL targets. Keep all employer-specific names/URLs out of git. Placeholders below are generic on purpose. Markers/terms/thresholds (bait_discovery) are non-sensitive and CAN stay here.",
+  "_comment": "Copy to config/targets.json (gitignored) and fill the competitor URLs/labels with your REAL targets. The FILTERS below (icp regexes, job titles, relevance/bait keywords, caps) are the VALIDATED weekly config — keep them as-is to reproduce the standard results; see docs/RUNBOOK.md. Keep employer-specific competitor names/URLs OUT of git (they live only in targets.json). Retarget to a different ICP via docs/ADAPTING.md.",
 
   "engagement": {
+    "_comment": "Mix company-page and exec-profile URLs; exec profiles yield far better cost-per-ICP. competitor_label maps each target URL -> the competitor name shown in the Competitor column (use your REAL competitor names in targets.json; placeholders here).",
     "competitor_company_urls": [
-      "https://www.linkedin.com/company/competitor-one",
-      "https://www.linkedin.com/company/competitor-two"
+      "https://www.linkedin.com/company/competitor-one/",
+      "https://www.linkedin.com/company/competitor-two/"
     ],
     "competitor_exec_urls": [
-      "https://www.linkedin.com/in/competitor-exec-one",
-      "https://www.linkedin.com/in/competitor-exec-two"
+      "https://www.linkedin.com/in/competitor-exec-one/",
+      "https://www.linkedin.com/in/competitor-exec-two/",
+      "https://www.linkedin.com/in/competitor-exec-three/"
     ],
     "competitor_label": {
-      "https://www.linkedin.com/company/competitor-one": "Competitor One",
-      "https://www.linkedin.com/in/competitor-exec-one": "Competitor One"
+      "https://www.linkedin.com/company/competitor-one/": "Competitor One",
+      "https://www.linkedin.com/company/competitor-two/": "Competitor Two",
+      "https://www.linkedin.com/in/competitor-exec-one/": "Competitor One",
+      "https://www.linkedin.com/in/competitor-exec-two/": "Competitor Two",
+      "https://www.linkedin.com/in/competitor-exec-three/": "Competitor Three"
     },
-    "drop_list": [
-      "https://www.linkedin.com/company/dead-competitor-page"
-    ],
+    "drop_list": [],
     "exclude_hiring_posts": true,
-    "exclude_engager_companies": [
-      "competitor-one", "competitor-two", "your-own-company"
-    ],
+    "exclude_engager_companies": ["competitor-one", "competitor-two", "competitor-three", "your-own-company"],
     "include_approved_watchlist": true,
     "enrich_current_company": true,
     "posted_limit": "week",
     "posts_scan_per_target": 10,
     "posts_per_target": 5,
-    "max_reactions_per_post": 10,
+    "max_reactions_per_post": 30,
     "max_comments_per_post": 20
   },
 
   "jobs": {
-    "_comment": "Use a few BROAD seed titles + a positive relevance filter; LinkedIn job search is fuzzy. Avoid bare, ambiguous seed tokens (a short word can match unrelated results).",
-    "titles": ["Your Primary Target Role", "Your Secondary Target Role"],
+    "_comment": "Broad seed titles + a positive relevance filter (LinkedIn job search is fuzzy). max_per_title is per (title x location); sort_by 'date' = freshest first.",
+    "titles": ["Total Rewards Manager", "Compensation Manager", "Compensation Analyst"],
     "locations": ["United States"],
-    "max_per_title": 25,
+    "max_per_title": 250,
     "posted_limit": "week",
-    "relevance_keywords": ["your-keyword-one", "your-keyword-two"],
-    "exclude_title_keywords": ["sales", "intern", "physician", "nurse", "attorney", "paralegal"],
+    "sort_by": "date",
+    "relevance_keywords": ["compensation", "reward"],
+    "exclude_title_keywords": [],
     "exclude_competitor_companies": true
   },
 
   "bait_discovery": {
-    "_comment": "Track 3: find target creators posting engagement-bait, then human-approve them into the watchlist. Bait = comment/DM call-to-action PAIRED WITH a promised deliverable (regex in scrape.py: BAIT_CTA_RE + BAIT_DELIVERABLE_RE); hiring posts excluded.",
-    "target_terms": ["your-keyword-one", "your-keyword-two", "your-keyword-three"],
+    "_comment": "Track 3: find target creators posting engagement-bait, then human-approve them into config/watchlist.json. Bait = comment/DM CTA PAIRED WITH a promised deliverable (BAIT_CTA_RE + BAIT_DELIVERABLE_RE in scrape.py); hiring posts excluded.",
+    "target_terms": ["compensation", "total rewards", "pay equity", "pay transparency"],
     "recency_days": 7,
     "min_engagement": 5,
     "min_bait_posts": 1,
@@ -51,16 +53,14 @@
     "max_comments": 20
   },
 
-  "pricing": {
-    "_comment": "OPTIONAL. HarvestAPI is pay-as-you-go; --estimate-only bills per returned result at these USD rates (no Apify platform margin). Defaults in scripts/scrape.py are $0.004/result; override any key to match your plan (harvestapi.io/pricing). Keys: post, reaction, comment, job, profile.",
-    "post": 0.004,
-    "reaction": 0.004,
-    "comment": 0.004,
-    "job": 0.004,
-    "profile": 0.004
+  "icp": {
+    "_comment": "VALIDATED comp/total-rewards ICP (see docs/RUNBOOK.md for how this was tuned + verified). tier1 = decision-makers (VP/SVP/Head/Director of Total Rewards/Compensation/People/HR, in either word order); tier2 = influencers (comp/rewards/benefits/people-ops individual contributors + managers/analysts); exclude = obvious non-buyers dropped pre-enrichment. A tier match WINS over exclude (so a real exec with a stray word isn't lost). Retarget via docs/ADAPTING.md.",
+    "tier1": "((chief people officer|\\bchro\\b|chief human resources)|(head of|vp|vice president|svp|senior director|director).{0,25}(rewards|compensation|people|human resources|\\bhr\\b)|(rewards|compensation|people|human resources|\\bhr\\b).{0,25}(head|vp|vice president|svp|director|officer|lead|leader))",
+    "tier2": "(rewards|compensation|comp & ben|compensation & benefits|people operations|hr business partner|\\bhrbp\\b|benefits manager)",
+    "exclude": "(\\bbrand\\b|public relations|\\bpr\\b|communications|marketing|customer support|customer success|\\bsales\\b|account executive|recruiter|sourcer|student|\\bintern\\b|software|\\bengineer\\b|designer)"
   },
 
-  "icp": {
-    "_comment": "OPTIONAL. Retarget the engagement + bait-discovery tracks to YOUR ICP without editing code. Add any of: tier1 / tier2 / exclude / hiring (regex strings, case-insensitive) and themes ([regex, label] pairs, first match wins). Each overrides the matching built-in placeholder default in scripts/scrape.py; any key you omit keeps its default, so leaving only this comment = use the defaults. Full copy-paste block and a Cursor-style dev-ICP example are in docs/ADAPTING.md."
+  "pricing": {
+    "_comment": "OPTIONAL. --estimate-only bills per returned result at these USD rates (no Apify margin). Confirm your plan's per-result cost at harvestapi.io/pricing and override; defaults in scripts/scrape.py are $0.004/result. Keys: post, reaction, comment, job, profile."
   }
 }

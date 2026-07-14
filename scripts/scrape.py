@@ -64,6 +64,31 @@ CALL_COUNTS = {}
 DEFAULT_PRICING = {"post": 0.004, "reaction": 0.004, "comment": 0.004,
                    "job": 0.004, "profile": 0.004}
 
+
+def _load_dotenv():
+    """Load KEY=VALUE lines from the repo .env into os.environ (only keys not already set), so
+    running `python3 scripts/scrape.py` standalone picks up HARVEST_API_KEY / ANTHROPIC_API_KEY
+    without sourcing .env first. The scheduled runner still sources .env itself; this is a
+    convenience for manual runs. Minimal stdlib parser — ignores blanks/comments; strips quotes."""
+    path = os.path.join(REPO, ".env")
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                k, v = k.strip(), v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    except OSError:
+        pass
+
+
+_load_dotenv()
+
 # Headers must match ingest/normalize.py maps so the drop is normalize-ready.
 ENGAGEMENT_HEADER = ["Engager Name", "Engager Company", "Title", "Email", "Current Company",
                      "Competitor", "Competitor Post Topic", "Post Type", "Hand Raiser",

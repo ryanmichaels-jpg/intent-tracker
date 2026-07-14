@@ -224,8 +224,14 @@ def harvest_get(endpoint, params, attempts=4):
                                  if v not in (None, "", [])}, doseq=True)
     url = f"{HARVEST_BASE}{endpoint}?{qs}"
     for i in range(attempts):
-        req = urllib.request.Request(url, headers={"X-API-Key": key,
-                                                   "Accept": "application/json"})
+        # A browser-like User-Agent is required: the default urllib UA ("Python-urllib/x.y")
+        # trips HarvestAPI's Cloudflare bot filter (HTTP 403, error 1010 "access denied based on
+        # browser signature"). Auth is still the X-API-Key header.
+        req = urllib.request.Request(url, headers={
+            "X-API-Key": key, "Accept": "application/json",
+            "User-Agent": ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/122.0.0.0 Safari/537.36")})
         try:
             with urllib.request.urlopen(req, timeout=180) as r:
                 return json.loads(r.read().decode())

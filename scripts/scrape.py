@@ -386,7 +386,7 @@ def post_engagement_score(post):
     return sum(int(e.get(k) or 0) for k in ("likes", "comments", "shares"))
 
 
-def run_engagement(cfg, test):
+def run_engagement(cfg, test, audit=False):
     eng = cfg.get("engagement", {})
     drop = {norm(u) for u in eng.get("drop_list", [])}
     exclude = {norm(x) for x in eng.get("exclude_engager_companies", [])}
@@ -494,7 +494,14 @@ def run_engagement(cfg, test):
                            "commentary": c.get("commentary") or ""})
 
     rows = {}
+    dropped = []   # audit trail of dropped engagers (reason + who) — written when --audit is set
     sk_co = sk_page = sk_icp = 0
+
+    def _drop(reason, name, headline, company="", competitor="", url=""):
+        dropped.append({"Stage": "engager", "Reason": reason, "Engager Name": name,
+                        "Title/Headline": headline, "Company": company,
+                        "Competitor": competitor, "Post URL": url})
+
     for it in events:
         etype = it["type"]
         pid = it["pid"]
@@ -504,13 +511,18 @@ def run_engagement(cfg, test):
         headline = a.get("position") or a.get("headline") or a.get("occupation") or ""
         if not name or is_company_actor(a):
             sk_page += (1 if name else 0)
+            if name:
+                _drop("company-page-actor", name, headline, url=meta.get("url", ""))
             continue
         if is_non_icp(headline):  # obvious non-ICP (engineer/data/sales/...) — drop pre-enrich
             sk_icp += 1
+            _drop("non-ICP-headline", name, headline, competitor=meta.get("competitor", ""),
+                  url=meta.get("url", ""))
             continue
         company = parse_company(headline)
         if is_excluded_company(company, exclude):
             sk_co += 1
+            _drop("excluded-company", name, headline, company=company, url=meta.get("url", ""))
             continue
         hand_raiser = "Y" if (etype == "comment" and meta.get("bait")) else "N"
         row = {
@@ -531,20 +543,33 @@ def run_engagement(cfg, test):
     out_rows = list(rows.values())
     if eng.get("enrich_current_company", True):
         enrich_current_company(out_rows)  # sets real Title + Company + Current Company
-        before = len(out_rows)
         # Positive ICP gate on the enriched real title (drops PT/CSM/GTM/CEO/etc.), plus the
-        # competitor/own-employer exclusion that enrichment may now reveal.
-        out_rows = [r for r in out_rows
-                    if is_icp(r["Title"]) and not is_excluded_company(r["Current Company"], exclude)
-                    and not own_company_engager(r.get("Competitor", ""),
-                                                r.get("Current Company", ""), r.get("Engager Company", ""))]
-        sk_co += before - len(out_rows)
+        # competitor/own-employer exclusion that enrichment may now reveal. Record each drop's
+        # specific reason so the audit file shows exactly why a signal was cut.
+        kept = []
+        for r in out_rows:
+            if not is_icp(r["Title"]):
+                _drop("non-ICP-title", r["Engager Name"], r["Title"], r["Current Company"],
+                      r.get("Competitor", ""), r.get("Post URL", ""))
+            elif is_excluded_company(r["Current Company"], exclude):
+                _drop("excluded-company-enriched", r["Engager Name"], r["Title"],
+                      r["Current Company"], r.get("Competitor", ""), r.get("Post URL", ""))
+            elif own_company_engager(r.get("Competitor", ""), r.get("Current Company", ""),
+                                     r.get("Engager Company", "")):
+                _drop("own-employer", r["Engager Name"], r["Title"], r["Current Company"],
+                      r.get("Competitor", ""), r.get("Post URL", ""))
+            else:
+                kept.append(r)
+        sk_co += len(out_rows) - len(kept)
+        out_rows = kept
     for r in out_rows:
         r["Profile URL"] = r.pop("_url", "")   # persist engager profile URL for later re-enrichment
         r.pop("_pid", None)                    # drop transient profile-id (not a CSV column)
 
     if review:
         _write_review(review)
+    if audit:
+        _write_audit("engagement", dropped)
     print(f"engagement: kept {len(out_rows)} | scanned {n_scanned} posts, "
           f"selected {len(selected)} for engagers | skipped hiring={sk_hire} competitor={sk_co} "
           f"pages={sk_page} non-ICP={sk_icp} non-target={sk_nontarget} | review={len(review)}",
@@ -554,6 +579,24 @@ def run_engagement(cfg, test):
         for ep in (EP_COMPANY_POSTS, EP_PROFILE_POSTS, EP_POST_REACTIONS,
                    EP_POST_COMMENTS, EP_PROFILE)), file=sys.stderr)
     return write_csv("engagement", ENGAGEMENT_HEADER, out_rows)
+
+
+AUDIT_HEADER = ["Stage", "Reason", "Engager Name", "Title/Headline", "Company",
+                "Competitor", "Post URL"]
+
+
+def _write_audit(track, dropped):
+    """Write every dropped row + its drop reason to data/raw/_audit/<track>_<date>.csv so a human
+    can scan for false negatives (good signals cut). It's a debug artifact written to an `_audit`
+    SUBDIRECTORY so the ingest's non-recursive `raw/*.csv` glob never picks it up."""
+    d = os.path.join(out_dir(), "_audit")
+    os.makedirs(d, exist_ok=True)
+    fn = os.path.join(d, f"{track}_{date.today().isoformat()}.csv")
+    with open(fn, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=AUDIT_HEADER, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(dropped)
+    print(f"{track}: wrote {len(dropped)} dropped row(s) -> {fn}", file=sys.stderr)
 
 
 def _write_review(review):
@@ -631,7 +674,7 @@ def enrich_current_company(rows):
 
 # ----------------------------- jobs track -----------------------------
 
-def run_jobs(cfg, test):
+def run_jobs(cfg, test, audit=False):
     jobs = cfg.get("jobs", {})
     titles = jobs.get("titles", [])
     if not titles:
@@ -652,7 +695,7 @@ def run_jobs(cfg, test):
     # (company, role, url); two genuinely-distinct postings of the same role -> separate rows.
     # The direct job-search endpoint takes ONE title + ONE location per query, so we loop the
     # title x location grid and paginate each to `max_per`.
-    out_rows, seen = [], set()
+    out_rows, seen, dropped = [], set(), []
     fetched = dropped_rel = dropped_title = dropped_co = 0
     for title in titles:
         for location in locations:
@@ -663,11 +706,18 @@ def run_jobs(cfg, test):
                 fetched += 1
                 jt = job.get("title") or ""
                 jt_n = match_norm(jt)
+                co0 = job.get("company")
+                co_name = (co0.get("name") if isinstance(co0, dict) else co0) or ""
+                jurl = job.get("url") or job.get("linkedinUrl") or ""
                 if rel and not any(k and k in jt_n for k in rel):
                     dropped_rel += 1
+                    dropped.append({"Stage": "job", "Reason": "off-topic-title",
+                                    "Title/Headline": jt, "Company": co_name, "Post URL": jurl})
                     continue
                 if excl_titles and any(k and k in jt_n for k in excl_titles):  # sales, clinical, ...
                     dropped_title += 1
+                    dropped.append({"Stage": "job", "Reason": "excluded-title",
+                                    "Title/Headline": jt, "Company": co_name, "Post URL": jurl})
                     continue
                 co = job.get("company")
                 company = (co.get("name") if isinstance(co, dict) else co) or ""
@@ -680,6 +730,8 @@ def run_jobs(cfg, test):
                     continue
                 if is_excluded_company(company, excl_co):  # competitor hiring — not a buyer
                     dropped_co += 1
+                    dropped.append({"Stage": "job", "Reason": "competitor-company",
+                                    "Title/Headline": jt, "Company": company, "Post URL": jurl})
                     continue
                 url = job.get("url") or job.get("linkedinUrl") or ""
                 key = (norm(company), norm(jt), url)
@@ -692,6 +744,8 @@ def run_jobs(cfg, test):
     print(f"jobs: {len(out_rows)} posting(s) kept | {fetched} fetched from API; dropped "
           f"{dropped_rel} off-topic, {dropped_title} excluded-title, {dropped_co} competitor "
           f"| job-search calls={CALL_COUNTS.get(EP_JOB_SEARCH, 0)}", file=sys.stderr)
+    if audit:
+        _write_audit("jobs", dropped)
     return write_csv("jobs", JOBS_HEADER, out_rows)
 
 
@@ -753,6 +807,9 @@ def main():
     ap.add_argument("--track", choices=["engagement", "jobs", "both"], default="both")
     ap.add_argument("--test", action="store_true", help="small caps, live smoke test")
     ap.add_argument("--estimate-only", action="store_true", help="offline cost estimate, no API calls")
+    ap.add_argument("--audit", action="store_true",
+                    help="also write data/raw/_audit_<track>_<date>.csv listing every dropped "
+                         "row + reason (to check filters for false negatives)")
     a = ap.parse_args()
 
     cfg = load_config()
@@ -762,10 +819,10 @@ def main():
 
     written = []
     if a.track in ("engagement", "both"):
-        f = run_engagement(cfg, a.test)
+        f = run_engagement(cfg, a.test, audit=a.audit)
         if f: written.append(f)
     if a.track in ("jobs", "both"):
-        f = run_jobs(cfg, a.test)
+        f = run_jobs(cfg, a.test, audit=a.audit)
         if f: written.append(f)
     print(f"scrape complete: {len(written)} file(s) in {out_dir()}", file=sys.stderr)
 

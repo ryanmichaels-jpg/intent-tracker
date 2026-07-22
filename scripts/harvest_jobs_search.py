@@ -25,7 +25,7 @@ Usage:
     python3 scripts/harvest_jobs_search.py \
         --location "United States" --location "United Kingdom" --location India
 """
-import argparse, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, csv, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -75,13 +75,27 @@ def clean_url(u):
     return (u or "").split("?")[0]
 
 
-def run(search, locations, geo_ids, posted_limit, max_pages, title_filter):
+def write_dropped(dropped_rows):
+    """Audit file for filter tuning. Kept OUT of the raw staging dir on purpose —
+    data/raw/*.csv is ingested by normalize.py, and these rows must never reach reps."""
+    d = os.path.join(scrape.REPO, "data", "audit")
+    os.makedirs(d, exist_ok=True)
+    fn = os.path.join(d, f"jobs_direct_dropped_{date.today().isoformat()}.csv")
+    with open(fn, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=["Reason", "Job Titles", "Company", "Post URL"])
+        w.writeheader()
+        w.writerows(dropped_rows)
+    print(f"jobs_direct: wrote {len(dropped_rows)} dropped rows -> {fn}", file=sys.stderr)
+
+
+def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
+        dropped_out=False):
     phrase_re = re.compile(re.escape(re.sub(r"\s+", " ", search.strip())), re.I)
     queries = ([{"geoId": g} for g in geo_ids] or
                [{"location": l} for l in locations] or
                [{}])  # no location param = worldwide (single query, capped ~1k results)
 
-    rows, seen, requests_made, fetched = [], set(), 0, 0
+    rows, seen, requests_made, fetched, dropped_rows = [], set(), 0, 0, []
     for q in queries:
         label = q.get("geoId") or q.get("location") or "worldwide"
         page, total_pages = 1, 1
@@ -103,11 +117,17 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter):
             for job in elements:
                 fetched += 1
                 title = re.sub(r"\s+", " ", (job.get("title") or "").strip())
-                if title_filter and not phrase_re.search(title):
-                    continue
                 url = clean_url(job.get("url"))
+                if title_filter and not phrase_re.search(title):
+                    dropped_rows.append({"Reason": "title filter", "Job Titles": title,
+                                         "Company": (job.get("company") or {}).get("name", ""),
+                                         "Post URL": url})
+                    continue
                 keys = [k for k in (job.get("id"), url) if k]
                 if not keys or any(k in seen for k in keys):
+                    dropped_rows.append({"Reason": "duplicate", "Job Titles": title,
+                                         "Company": (job.get("company") or {}).get("name", ""),
+                                         "Post URL": url})
                     continue
                 seen.update(keys)
                 rows.append({"Company": (job.get("company") or {}).get("name", ""),
@@ -123,6 +143,8 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter):
     print(f"jobs_direct: {len(rows)} posting(s) kept | {fetched} fetched; {dropped} dropped "
           f"(title filter + dedupe) | {requests_made} requests "
           f"≈ ${requests_made * EST_PRICE_PER_REQUEST:.2f}", file=sys.stderr)
+    if dropped_out and dropped_rows:
+        write_dropped(dropped_rows)
     if not rows:
         return None
     return scrape.write_csv("jobs_direct", scrape.JOBS_HEADER, rows)
@@ -149,6 +171,8 @@ def main():
                     help=f"page cap per query (default {PAGE_CAP} ≈ LinkedIn's ~1k-result limit)")
     ap.add_argument("--no-title-filter", action="store_true",
                     help="keep every fetched posting (LinkedIn search is fuzzy)")
+    ap.add_argument("--dropped-out", action="store_true",
+                    help="also write dropped rows + reason to data/audit/ for filter tuning")
     ap.add_argument("--test", action="store_true", help="1 page per query, live smoke test")
     ap.add_argument("--estimate-only", action="store_true",
                     help="offline worst-case cost estimate, no API calls")
@@ -159,7 +183,7 @@ def main():
         estimate(a.location, a.geo_id, max_pages)
         return
     run(a.search, a.location, a.geo_id, a.posted_limit, max_pages,
-        title_filter=not a.no_title_filter)
+        title_filter=not a.no_title_filter, dropped_out=a.dropped_out)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@ blank — they are filled downstream by the CRM-connected step.
 Usage:
     python3 ingest/normalize.py RAW [RAW ...] --out OUT.csv [--week 2026-W23] [--history MASTER.csv]
 """
-import argparse, csv, re, sys
+import argparse, csv, os, re, sys
 from collections import defaultdict
 
 SCHEMA = ["Week","Source","Company","Domain","Person Name","Title","Email",
@@ -106,6 +106,8 @@ def main():
     rows = dedupe(rows)
     rows = tag_new_repeat(rows, history_people)
 
+    if os.path.dirname(a.out):
+        os.makedirs(os.path.dirname(a.out), exist_ok=True)
     with open(a.out, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=SCHEMA)
         w.writeheader(); w.writerows(rows)

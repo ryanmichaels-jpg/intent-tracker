@@ -89,7 +89,7 @@ def write_dropped(dropped_rows):
 
 
 def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
-        dropped_out=False):
+        dropped_out=False, sort_by="date"):
     phrase_re = re.compile(re.escape(re.sub(r"\s+", " ", search.strip())), re.I)
     queries = ([{"geoId": g} for g in geo_ids] or
                [{"location": l} for l in locations] or
@@ -101,7 +101,7 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
         page, total_pages = 1, 1
         while page <= min(total_pages, max_pages):
             resp = api_get({"search": search, "postedLimit": posted_limit,
-                            "sortBy": "date", "page": page, **q})
+                            "sortBy": sort_by, "page": page, **q})
             requests_made += 1
             elements = resp.get("elements") or []
             pg = resp.get("pagination") or {}
@@ -173,6 +173,9 @@ def main():
                     help="keep every fetched posting (LinkedIn search is fuzzy)")
     ap.add_argument("--dropped-out", action="store_true",
                     help="also write dropped rows + reason to data/audit/ for filter tuning")
+    ap.add_argument("--sort-by", default="date", choices=["date", "relevance"],
+                    help="'date' for incremental pulls; 'relevance' packs exact title matches "
+                         "into the ~1k-result cap (best for one-time sweeps)")
     ap.add_argument("--test", action="store_true", help="1 page per query, live smoke test")
     ap.add_argument("--estimate-only", action="store_true",
                     help="offline worst-case cost estimate, no API calls")
@@ -183,7 +186,7 @@ def main():
         estimate(a.location, a.geo_id, max_pages)
         return
     run(a.search, a.location, a.geo_id, a.posted_limit, max_pages,
-        title_filter=not a.no_title_filter, dropped_out=a.dropped_out)
+        title_filter=not a.no_title_filter, dropped_out=a.dropped_out, sort_by=a.sort_by)
 
 
 if __name__ == "__main__":

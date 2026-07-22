@@ -135,6 +135,8 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
                              "Signal": search,
                              "Job Titles": title,
                              "Post URL": url})
+            print(f"[{label}] page {page}/{min(total_pages, max_pages)}: "
+                  f"{len(elements)} fetched, {len(rows)} kept so far", file=sys.stderr)
             page += 1
         print(f"[{label}] done: {len(rows)} kept so far ({requests_made} requests)",
               file=sys.stderr)

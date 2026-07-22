@@ -16,6 +16,8 @@ secrets.*
 #  data rule above would otherwise hide it, so re-include it explicitly)
 config/targets.json
 !config/targets.example.json
+config/ats_boards.json
+!config/ats_boards.example.json
 # Track 3 watchlist holds real creator names — keep populated files out of git.
 config/watchlist.json
 config/watchlist_candidates.json

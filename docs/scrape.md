@@ -163,6 +163,25 @@ python3 scripts/harvest_jobs_search.py                    # worldwide, past mont
 python3 scripts/harvest_jobs_search.py --posted-limit week   # weekly cadence
 ```
 
+## Jobs via Ashby + Lever job boards (free public APIs)
+
+Driver: [`scripts/ats_jobs.py`](../scripts/ats_jobs.py). Both ATSes expose unauthenticated
+per-company feeds (`api.ashbyhq.com/posting-api/job-board/<slug>`,
+`api.lever.co/v0/postings/<slug>?mode=json`) — **$0, no key**. There is no global search, so
+you watch a list of company board slugs: `config/ats_boards.json` (gitignored; copy from
+`config/ats_boards.example.json`). Same title-contains filter, posted-date window, dedupe,
+and `--dropped-out` audit as the HarvestAPI track; output `jobs_ats_<date>.csv` is
+normalize-ready (Domain blank — feeds carry no website). Unknown/renamed slugs are skipped
+with a warning, so a stale board never kills the run.
+
+```bash
+python3 scripts/ats_jobs.py --ashby ramp --lever palantir     # ad-hoc smoke test
+python3 scripts/ats_jobs.py --dropped-out                     # boards from config
+```
+
+Seed the board list from the LinkedIn track's output: for each company already surfaced in
+`jobs_direct_*.csv`, check `jobs.ashbyhq.com/<name>` / `jobs.lever.co/<name>`.
+
 ## Track 3 — bait discovery + hand-raiser surfacing
 
 Driver: [`scripts/bait_discovery.py`](../scripts/bait_discovery.py) (actor

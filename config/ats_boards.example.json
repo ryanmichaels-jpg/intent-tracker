@@ -1,0 +1,10 @@
+{
+  "_comment": "Copy to config/ats_boards.json (gitignored) and fill with the REAL companies you watch. Slug = last path segment of the public board URL (https://jobs.ashbyhq.com/<slug>, https://jobs.lever.co/<slug>). Value = display name for the Company column ('' = derive from slug). Keep employer-specific target lists out of git.",
+  "ashby": {
+    "example-company": "Example Company",
+    "another-company": ""
+  },
+  "lever": {
+    "example-corp": "Example Corp"
+  }
+}

@@ -137,6 +137,32 @@ reusing `APIFY_API_TOKEN` (no separate enrichment key/plan). It fills the real *
 - (We previously tried Apollo People Match — it requires a paid plan, so we use the Apify
   profile scraper instead.)
 
+## Jobs via HarvestAPI direct (search-only, no Apify)
+
+Driver: [`scripts/harvest_jobs_search.py`](../scripts/harvest_jobs_search.py). Alternative to
+the Apify jobs actor: it calls HarvestAPI's own endpoint
+(`GET https://api.harvest-api.com/linkedin/job-search`, secret `HARVESTAPI_API_KEY` in `.env`)
+and is **search-only** — you pay per search *page* (~25 postings/request, ≈$0.001/request on
+the Starter pack), never per-posting detail fetches. A full global past-month sweep of a
+title runs a few dollars vs ~$100 with per-item pricing.
+
+- Keeps only postings whose **title contains the search phrase** (default `"Data Governance"`;
+  LinkedIn search is fuzzy, so this filter restores precision). `--no-title-filter` keeps all.
+- Output: `jobs_direct_<date>.csv` with the same `JOBS_HEADER` as the Apify track →
+  normalize-ready. **Domain stays blank** (search results carry no company website); the CRM
+  match step matches these rows on Company name.
+- LinkedIn caps any single search at ~1,000 results (~40 pages). One worldwide query is fine
+  for a weekly incremental pull; for a full global sweep pass one query per country via
+  repeated `--location` (or `--geo-id`, found via HarvestAPI's `/linkedin/geo-id-search`).
+- Dedupes across shards by job id + canonical URL.
+
+```bash
+python3 scripts/harvest_jobs_search.py --estimate-only    # offline worst-case cost
+python3 scripts/harvest_jobs_search.py --test             # 1 page per query, live smoke test
+python3 scripts/harvest_jobs_search.py                    # worldwide, past month (capped ~1k)
+python3 scripts/harvest_jobs_search.py --posted-limit week   # weekly cadence
+```
+
 ## Track 3 — bait discovery + hand-raiser surfacing
 
 Driver: [`scripts/bait_discovery.py`](../scripts/bait_discovery.py) (actor

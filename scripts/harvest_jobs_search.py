@@ -45,7 +45,13 @@ def api_get(params, attempts=3):
     qs = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
     url = f"{API_BASE}{SEARCH_PATH}?{qs}"
     for i in range(attempts):
-        req = urllib.request.Request(url, headers={"X-API-Key": key})
+        # Custom User-Agent: Cloudflare fronts the API and bans urllib's default
+        # signature with a 403 error code 1010.
+        req = urllib.request.Request(url, headers={
+            "X-API-Key": key,
+            "User-Agent": "Mozilla/5.0 (compatible; comp-intel-hub/1.0)",
+            "Accept": "application/json",
+        })
         try:
             with urllib.request.urlopen(req, timeout=120) as r:
                 return json.loads(r.read().decode())

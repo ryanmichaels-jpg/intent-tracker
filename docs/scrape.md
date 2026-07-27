@@ -9,14 +9,18 @@ Driver: [`scripts/scrape.py`](../scripts/scrape.py). Targets: `config/targets.js
 
 ## Two tracks
 
-| Track | Apify actor | Produces |
+| Track | HarvestAPI endpoints | Produces |
 |---|---|---|
-| **Engagement** | `harvestapi/linkedin-company-posts` | People who reacted to / commented on competitor posts |
-| **Jobs** | `harvestapi/linkedin-job-search` | Companies hiring target roles (budget signal) |
+| **Engagement** | `/linkedin/company-posts` + `/linkedin/profile-posts`, then per kept post `/linkedin/post-reactions` + `/linkedin/post-comments` | People who reacted to / commented on competitor posts |
+| **Jobs** | `/linkedin/job-search` (+ `/linkedin/company` to fill Domain) | Companies hiring target roles (budget signal) |
 
-Both accept the same `APIFY_API_TOKEN`. The engagement actor takes **company page URLs and
-exec profile URLs interchangeably** in one `targetUrls` array — per the PoC, named execs yield
-far better cost-per-ICP than company pages, so configure both and lean on execs.
+All calls go to the **direct HarvestAPI REST API** (`https://api.harvestapi.io`, auth =
+`X-API-Key: $HARVEST_API_KEY`; a real User-Agent header is required or Cloudflare 403s).
+Company page URLs and exec profile URLs are both supported targets — per the PoC, named execs
+yield far better cost-per-ICP than company pages, so configure both and lean on execs.
+Because posts return an explicit `postedAt`, the driver supports an exact posted-date window
+via `--since YYYY-MM-DD --until YYYY-MM-DD` (use `posted_limit: "month"` to reach back far
+enough, then the window trims precisely — this is how a missed week is backfilled).
 
 ## Inputs (`config/targets.json`)
 
@@ -79,14 +83,16 @@ A target's feed can surface a post **authored by someone else** (a reshare). For
   **not** surfaced until you approve the author into `watchlist.json`.
 - **Not on-target** (0 terms) → dropped silently.
 
-### Verified actor shapes (from the smoke test)
+### Verified API shapes (from the smoke test)
 
-The engagement actor (`harvestapi/linkedin-company-posts`) returns **flattened** records — one
-item per `post` / `reaction` / `comment` — with `actor` (the engager: `name`, `position`,
-`linkedinUrl`), post text in `content`, comment text in `commentary`, and `commentIds` /
-`reactionIds` on the post used to link engagers to their post (sidesteps the ugcPost/activity
-twin-id mismatch). The jobs actor (`harvestapi/linkedin-job-search`) takes `jobTitles` (array)
-+ `locations` (array); company is an object (`company.name`, `company.website`).
+List endpoints return `{pagination: {totalPages, paginationToken, pageSize: 50}, elements: […]}`;
+single-object endpoints may wrap the payload in `element`. Posts carry `id`, `linkedinUrl`,
+`content`, `author` (`name`, `universalName`, `linkedinUrl`) and `postedAt`
+(`{timestamp, date}`). Reactions/comments are fetched **per post** (so engager→post linkage is
+explicit — the old ugcPost/activity twin-id workaround is unnecessary); the engager is under
+`actor` (`name`, `position`, `linkedinUrl` — reactions return session-ID URLs, comments public
+handles). Job search returns `title`, `postedDate` (ISO), `company.name` — but **no company
+website**, hence the `/linkedin/company` Domain fill.
 
 ## Source-side dedupe (before the file is even written)
 
@@ -117,30 +123,31 @@ recognize, so the drop is ingested with no extra mapping. The five newer columns
 | **Post Topic** | short themed label (keyword map → a short theme label; Haiku fills misses) | the job-signal term |
 | **Post Type** | `reaction` / `comment` | n/a |
 | **Hand Raiser** | `Y` when the engagement is a **comment on a bait post** (post text matches the bait markers); else `N` | n/a |
-| **Email / Domain** | not enriched — left blank (Domain stays blank for engagement) | Domain parsed from company website |
+| **Email / Domain** | not enriched — left blank (Domain stays blank for engagement) | Domain via `/linkedin/company` lookup (`jobs.enrich_company_domain`) |
 
 ## Current-company enrichment (engagement)
 
 `enrich_current_company()` runs when `engagement.enrich_current_company` is true (default). It
-collects each unique engager profile URL and bulk-scrapes them via
-**harvestapi/linkedin-profile-scraper** in `'Profile details no email ($4 per 1k)'` mode —
-reusing `APIFY_API_TOKEN` (no separate enrichment key/plan). It fills the real **Title**
-(`currentPosition[0].position` — not the noisy headline) and **Company**
-(`currentPosition[0].companyName`).
+calls **GET `/linkedin/profile`** once per unique engager URL (the direct API has no bulk
+lookup) — reusing `HARVEST_API_KEY` (no separate enrichment key/plan). It fills the real
+**Title** (`currentPosition[0].position` — not the noisy headline) and **Company**
+(`currentPosition[0].companyName`). Works for both public-handle and session-ID (`/in/ACoAA…`)
+URLs.
 
-- **Email is intentionally not fetched** (the cheaper no-email mode), so the `Email` column
-  stays blank. Switching to the `'+ email search ($10 per 1k)'` mode would populate it.
-- **Domain** is not populated by this step (the profile scraper exposes the company's
-  LinkedIn URL, not a web domain).
-- Cost ≈ $4 per 1,000 unique engagers (one actor run per 100 URLs). Set
-  `enrich_current_company: false` to skip.
-- (We previously tried Apollo People Match — it requires a paid plan, so we use the Apify
-  profile scraper instead.)
+- **Email is intentionally not fetched** (HarvestAPI's email-finding modes cost extra credits),
+  so the `Email` column stays blank.
+- **Domain** is not populated by this step (engagement rows keep Domain blank).
+- Cost = one API request per unique engager, capped by `engagement.max_enrich` (default 400);
+  a failed lookup skips that engager. Set `enrich_current_company: false` to skip entirely.
+- (We previously tried Apollo People Match — it requires a paid plan — and before that the
+  Apify bulk profile-scraper actor; the direct API replaced both.)
 
 ## Track 3 — bait discovery + hand-raiser surfacing
 
 Driver: [`scripts/bait_discovery.py`](../scripts/bait_discovery.py) (actor
 `harvestapi/linkedin-post-search`); config under `bait_discovery` in `config/targets.json`.
+**Not yet migrated to the direct API** — Track 3 still calls the Apify-hosted actors and needs
+`APIFY_API_TOKEN`; the main scrape (Tracks 1–2) uses only `HARVEST_API_KEY`.
 It searches target-term posts (with `scrapeComments`) and flags **bait posts** — defined as a
 post containing **both** a comment/DM call-to-action **and** a promised deliverable
 (`BAIT_CTA_RE` + `BAIT_DELIVERABLE_RE` in `scrape.py`), e.g. *"comment GUIDE and I'll send you

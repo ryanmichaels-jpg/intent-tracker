@@ -25,7 +25,7 @@ Usage:
     python3 scripts/harvest_jobs_search.py \
         --location "United States" --location "United Kingdom" --location India
 """
-import argparse, csv, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, csv, http.client, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
 from datetime import date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -61,13 +61,24 @@ def api_get(params, attempts=3):
                 print(f"[harvest] {e.code}, retrying ({i+1}/{attempts})…", file=sys.stderr)
                 time.sleep(5 * (i + 1))
                 continue
-            sys.exit(f"ERROR: HarvestAPI returned {e.code}: {e.read().decode()[:300]}")
-        except urllib.error.URLError as e:
+            if not transient:
+                # 401/403/400 won't fix themselves — abort the whole run.
+                sys.exit(f"ERROR: HarvestAPI returned {e.code}: {e.read().decode()[:300]}")
+            print(f"[harvest] {e.code} after {attempts} attempts — skipping this page",
+                  file=sys.stderr)
+            return None
+        except (urllib.error.URLError, http.client.HTTPException, OSError,
+                json.JSONDecodeError) as e:
+            # Covers dropped connections (RemoteDisconnected), timeouts, and
+            # truncated responses — all transient on a long paginated run.
             if i < attempts - 1:
-                print(f"[harvest] url error, retrying ({i+1}/{attempts})…", file=sys.stderr)
+                print(f"[harvest] {type(e).__name__}, retrying ({i+1}/{attempts})…",
+                      file=sys.stderr)
                 time.sleep(5 * (i + 1))
                 continue
-            sys.exit(f"ERROR: HarvestAPI url error: {e}")
+            print(f"[harvest] {type(e).__name__} after {attempts} attempts — "
+                  f"skipping this page", file=sys.stderr)
+            return None
 
 
 def clean_url(u):
@@ -113,6 +124,9 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
             resp = api_get({"search": search, "postedLimit": posted_limit,
                             "sortBy": sort_by, "page": page, **q})
             requests_made += 1
+            if resp is None:
+                print(f"[{label}] giving up on this query, moving on", file=sys.stderr)
+                break
             elements = resp.get("elements") or []
             pg = resp.get("pagination") or {}
             total_pages = pg.get("totalPages") or 1
@@ -150,6 +164,9 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
             page += 1
         print(f"[{label}] done: {len(rows)} kept so far ({requests_made} requests)",
               file=sys.stderr)
+        if rows:
+            # Checkpoint after every query so a crash can't lose the whole run.
+            scrape.write_csv(f"jobs_direct_{search_slug(search)}", scrape.JOBS_HEADER, rows)
 
     dropped = fetched - len(rows)
     print(f"jobs_direct: {len(rows)} posting(s) kept | {fetched} fetched; {dropped} dropped "

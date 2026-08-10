@@ -148,8 +148,10 @@ title runs a few dollars vs ~$100 with per-item pricing.
 
 - Keeps only postings whose **title contains the search phrase** (default `"Data Governance"`;
   LinkedIn search is fuzzy, so this filter restores precision). `--no-title-filter` keeps all.
-- Output: `jobs_direct_<date>.csv` with the same `JOBS_HEADER` as the Apify track →
-  normalize-ready. **Domain stays blank** (search results carry no company website); the CRM
+- Output: `jobs_direct_<search-slug>_<date>.csv` with the same `JOBS_HEADER` as the Apify
+  track → normalize-ready, and different roles scraped the same day can't clobber each other.
+  Title matching treats hyphens as spaces ("Forward-Deployed Engineer" matches the phrase
+  "Forward Deployed"). **Domain stays blank** (search results carry no company website); the CRM
   match step matches these rows on Company name.
 - LinkedIn caps any single search at ~1,000 results (~40 pages). One worldwide query is fine
   for a weekly incremental pull; for a full global sweep pass one query per country via

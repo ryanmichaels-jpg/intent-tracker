@@ -75,12 +75,22 @@ def clean_url(u):
     return (u or "").split("?")[0]
 
 
-def write_dropped(dropped_rows):
+def match_norm(s):
+    """Normalize for title matching: hyphens/dashes count as spaces so
+    'Forward-Deployed Engineer' matches the phrase 'Forward Deployed'."""
+    return re.sub(r"\s+", " ", re.sub(r"[-‐‑–—]", " ", s)).strip()
+
+
+def search_slug(search):
+    return re.sub(r"[^a-z0-9]+", "-", search.lower()).strip("-")
+
+
+def write_dropped(dropped_rows, slug):
     """Audit file for filter tuning. Kept OUT of the raw staging dir on purpose —
     data/raw/*.csv is ingested by normalize.py, and these rows must never reach reps."""
     d = os.path.join(scrape.REPO, "data", "audit")
     os.makedirs(d, exist_ok=True)
-    fn = os.path.join(d, f"jobs_direct_dropped_{date.today().isoformat()}.csv")
+    fn = os.path.join(d, f"jobs_direct_{slug}_dropped_{date.today().isoformat()}.csv")
     with open(fn, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["Reason", "Job Titles", "Company", "Post URL"])
         w.writeheader()
@@ -90,7 +100,7 @@ def write_dropped(dropped_rows):
 
 def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
         dropped_out=False, sort_by="date"):
-    phrase_re = re.compile(re.escape(re.sub(r"\s+", " ", search.strip())), re.I)
+    phrase_re = re.compile(re.escape(match_norm(search)), re.I)
     queries = ([{"geoId": g} for g in geo_ids] or
                [{"location": l} for l in locations] or
                [{}])  # no location param = worldwide (single query, capped ~1k results)
@@ -118,7 +128,7 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
                 fetched += 1
                 title = re.sub(r"\s+", " ", (job.get("title") or "").strip())
                 url = clean_url(job.get("url"))
-                if title_filter and not phrase_re.search(title):
+                if title_filter and not phrase_re.search(match_norm(title)):
                     dropped_rows.append({"Reason": "title filter", "Job Titles": title,
                                          "Company": (job.get("company") or {}).get("name", ""),
                                          "Post URL": url})
@@ -145,11 +155,12 @@ def run(search, locations, geo_ids, posted_limit, max_pages, title_filter,
     print(f"jobs_direct: {len(rows)} posting(s) kept | {fetched} fetched; {dropped} dropped "
           f"(title filter + dedupe) | {requests_made} requests "
           f"≈ ${requests_made * EST_PRICE_PER_REQUEST:.2f}", file=sys.stderr)
+    slug = search_slug(search)
     if dropped_out and dropped_rows:
-        write_dropped(dropped_rows)
+        write_dropped(dropped_rows, slug)
     if not rows:
         return None
-    return scrape.write_csv("jobs_direct", scrape.JOBS_HEADER, rows)
+    return scrape.write_csv(f"jobs_direct_{slug}", scrape.JOBS_HEADER, rows)
 
 
 def estimate(locations, geo_ids, max_pages):

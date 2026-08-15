@@ -162,10 +162,13 @@ def classify_org(name):
 # ----------------------------- stages -----------------------------
 
 def stage_leads(st, max_leads, test):
-    if st["leads_done"]:
+    """Collect leads up to max_leads. leads_done means the SEARCH ran dry, not that a
+    smaller earlier run (e.g. --test) finished — so a bigger --max-leads resumes."""
+    if st["leads_done"] or len(st["leads"]) >= max_leads:
         print(f"[leads] cached: {len(st['leads'])}", file=sys.stderr)
         return
-    page, token = 1, None
+    seen_ids = {l["id"] or l["url"] for l in st["leads"]}
+    page, token = st.get("next_page", 1), st.get("pg_token")
     while len(st["leads"]) < max_leads:
         resp = api_get("lead-search", {
             "currentJobTitles": ",".join(TITLES),
@@ -177,10 +180,15 @@ def stage_leads(st, max_leads, test):
             break
         elements = resp.get("elements") or []
         if not elements:
+            st["leads_done"] = True  # search ran dry — the true "done"
             break
         for el in elements:
             nm = first(el, "name", "fullName") or \
                  f"{el.get('firstName','')} {el.get('lastName','')}".strip()
+            lid = first(el, "id", "profileId") or first(el, "linkedinUrl", "url")
+            if lid in seen_ids:
+                continue
+            seen_ids.add(lid)
             pos = next((p for p in el.get("currentPositions") or [] if p.get("title")), {})
             st["leads"].append({
                 "name": nm,
@@ -190,11 +198,11 @@ def stage_leads(st, max_leads, test):
                 "id": first(el, "id", "profileId", "publicIdentifier")})
         token = (resp.get("pagination") or {}).get("paginationToken")
         print(f"[leads] page {page}: {len(st['leads'])} collected", file=sys.stderr)
-        save_state(st)
         page += 1
+        st["next_page"], st["pg_token"] = page, token
+        save_state(st)
         if test:
             break
-    st["leads_done"] = True
     save_state(st)
 
 

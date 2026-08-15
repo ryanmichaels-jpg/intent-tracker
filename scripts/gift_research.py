@@ -121,11 +121,12 @@ def api_get(endpoint, params, attempts=3):
 # ----------------------------- state / helpers -----------------------------
 
 def load_state():
+    st = {"leads": [], "leads_done": False, "profiles": {}, "activity": {},
+          "org_cache": {}, "companies": {}}
     if os.path.exists(STATE_PATH):
         with open(STATE_PATH) as f:
-            return json.load(f)
-    return {"leads": [], "leads_done": False, "profiles": {}, "activity": {},
-            "org_cache": {}, "companies": {}}
+            st.update(json.load(f))
+    return st
 
 
 def save_state(st):

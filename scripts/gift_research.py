@@ -60,9 +60,20 @@ EXCLUDE_TITLE_RE = re.compile(r"(analyst|coordinator|specialist|associate\b|inte
                               r"sales\s*comp|incentive\s*comp|sales\s*incentive|"
                               r"commission|workers'?\s*comp|workman'?s\s*comp)", re.I)
 
-# Orgs never worth a donation-gift (huge trade associations): hard-excluded.
+# Orgs never worth a donation-gift: huge trade associations, plus Greek-letter
+# fraternities/sororities/honor societies (a donation there isn't a cause gift).
+_GREEK = r"alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega"
 ORG_BLOCKLIST_RE = re.compile(r"(world\s*at\s*work|worldatwork|\bshrm\b|"
-                              r"society for human resource management)", re.I)
+                              r"society for human resource management|"
+                              r"fraternit|sororit|honou?r\s*society|greek\s*life|"
+                              rf"\b({_GREEK})\s+({_GREEK})(\s+({_GREEK}))?\b)", re.I)
+
+# Meaningful involvement: an officer/founder/board-level role in the org.
+LEADER_RE = re.compile(r"(found(er|ing)|co-?found|board|chair|president|trustee|"
+                       r"treasurer|secretary|officer|organizer|\blead\b|captain|"
+                       r"committee|advisor|adviser|coach|mentor|director)", re.I)
+
+ANTHROPIC_MODEL = "claude-haiku-4-5-20251001"  # org donation-fit judge (cheap, cached)
 
 # The lead's employer must be verifiably tech/software (belt-and-braces on top of
 # the server-side industry filter, which uses LinkedIn ids that can misclassify).
@@ -351,9 +362,11 @@ def stage_activity(st, key, lead, org_name, org_page):
 
 
 def resolve_org(st, org_name, max_posts=5):
-    """Org name -> its LinkedIn page + recent post URLs (cached across contacts)."""
+    """Org name -> its LinkedIn page, recent post URLs, page facts (size/about), and
+    a donation-fit judgment. Cached across contacts."""
     ck = norm(org_name)
-    if ck not in st["org_cache"]:
+    cache = st["org_cache"].get(ck) or {}
+    if "page" not in cache:
         cache = {"page": "", "posts": []}
         found = api_get("company-search", {"search": org_name})
         for c in (found or {}).get("elements") or []:
@@ -364,9 +377,69 @@ def resolve_org(st, org_name, max_posts=5):
             posts = api_get("company-posts", {"company": cache["page"]})
             cache["posts"] = [first(p, "linkedinUrl", "url")
                               for p in (posts or {}).get("elements") or []][:max_posts]
-        st["org_cache"][ck] = cache
-        save_state(st)
-    return st["org_cache"][ck]
+    if "facts" not in cache:
+        facts = {"staff": "", "about": "", "followers": ""}
+        if cache["page"]:
+            resp = api_get("company", {"url": cache["page"]})
+            el = (resp or {}).get("element") or resp or {}
+            facts["staff"] = str(el.get("employeeCount") or
+                                 first(el, "employeeCountRange") or "")
+            facts["about"] = (first(el, "description", "about", "tagline") or "")[:400]
+            facts["followers"] = str(el.get("followerCount") or "")
+        cache["facts"] = facts
+    if "judge" not in cache:
+        cache["judge"] = judge_org(org_name, cache["facts"])
+    st["org_cache"][ck] = cache
+    save_state(st)
+    return cache
+
+
+def judge_org(org_name, facts):
+    """Donation-fit judgment: Haiku when ANTHROPIC_API_KEY is set, else a size
+    heuristic from the org's LinkedIn staff count. Returns {size, about, fit, reason}."""
+    j = {"size": "", "about": (facts.get("about") or "")[:80], "fit": "", "reason": ""}
+    staff = re.sub(r"[^0-9]", "", (facts.get("staff") or "").split("-")[0]) or "0"
+    n = int(staff)
+    if n:
+        j["size"] = ("local" if n <= 15 else "mid-size" if n <= 200 else "large")
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        if j["size"] == "large":
+            j["fit"], j["reason"] = "weak", "large org; donation impact diluted"
+        elif j["size"]:
+            j["fit"], j["reason"] = "moderate", "size heuristic only (no LLM judge)"
+        return j
+    body = {"model": ANTHROPIC_MODEL, "max_tokens": 150,
+            "messages": [{"role": "user", "content":
+                          "You judge whether a small donation made in a person's honor to this "
+                          "organization would land as a thoughtful, personal gift. Charity-like, "
+                          "community, or cause orgs = strong. Huge national charities = moderate "
+                          "(real but impersonal). Trade/professional associations, alumni bodies, "
+                          "clubs that mainly serve members = weak.\n"
+                          f"Organization: {org_name}\n"
+                          f"LinkedIn staff count: {facts.get('staff') or 'unknown'}; "
+                          f"followers: {facts.get('followers') or 'unknown'}\n"
+                          f"LinkedIn description: {facts.get('about') or 'none'}\n"
+                          'Reply ONLY with JSON: {"size":"local|mid-size|large|unknown",'
+                          '"about":"<what they do, max 8 words>",'
+                          '"fit":"strong|moderate|weak","reason":"<max 12 words>"}'}]}
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages",
+                                 data=json.dumps(body).encode(),
+                                 headers={"x-api-key": key,
+                                          "anthropic-version": "2023-06-01",
+                                          "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            txt = json.loads(r.read().decode())["content"][0]["text"]
+        m = re.search(r"\{.*\}", txt, re.S)
+        if m:
+            parsed = json.loads(m.group(0))
+            for k in ("size", "about", "fit", "reason"):
+                if parsed.get(k):
+                    j[k] = str(parsed[k])[:100]
+    except Exception as e:
+        print(f"[judge] {org_name}: {type(e).__name__} — using heuristic", file=sys.stderr)
+    return j
 
 
 def org_side_engagement(st, cache, lead):
@@ -392,19 +465,18 @@ def is_current(aff):
 
 
 def score(aff, ev, engagements):
-    """engagements = count of DISTINCT org-authored posts the contact engaged with.
-    -> (tier, reason)"""
+    """Role-first ranking: a meaningful role (founder/board/officer/mentor) in a
+    current affiliation is the primary Tier A signal; engagement/authored evidence
+    is the secondary path. engagements = distinct org-authored posts engaged with."""
     if not is_current(aff):
         return "C", "affiliation ended"
-    leader = re.search(r"(board|chair|president|founder|organizer|lead|director|trustee|"
-                       r"treasurer|secretary|mentor)", aff.get("role") or "", re.I)
+    if LEADER_RE.search(aff.get("role") or ""):
+        return "A", f"meaningful role: {aff.get('role')}"
     if engagements >= 2:
         return "A", f"engaged with {engagements} of the org's own posts"
     if ev["authored"]:
         return "A", f"posted about org by name ({ev['authored']}x" + \
                (f", latest {ev['latest']}" if ev["latest"] else "") + ")"
-    if leader:
-        return "A", f"leadership role: {aff.get('role')}"
     if engagements == 1:
         return "B", "single engagement with an org post"
     return "B", "current listing, no activity evidence"
@@ -475,23 +547,34 @@ def main():
                 why += "; org has no LinkedIn page (engagement unverifiable)"
             links = list(dict.fromkeys((ev.get("links") or []) + org_links))
             pubs = get_publications(st, key, lead)
+            judge = org.get("judge") or {}
+            giftable = ("REVIEW-SENSITIVE" if cat != "neutral" else
+                        "REVIEW-FIT" if judge.get("fit") == "weak" else "YES")
             out.append({"Tier": tier, "Name": lead["name"], "Title": lead["title"],
                         "Company": lead["company"], "Profile URL": lead["url"],
                         "Organization": aff["org"], "Org Role": aff["role"],
                         "Org Type": aff["kind"], "Org Category": cat,
-                        "Giftable": "REVIEW-SENSITIVE" if cat != "neutral" else "YES",
+                        "Org Size": judge.get("size", ""),
+                        "Org About": judge.get("about", ""),
+                        "Donation Fit": (f"{judge.get('fit','')}"
+                                         f"{' — ' + judge.get('reason','') if judge.get('reason') else ''}"),
+                        "Giftable": giftable,
                         "Evidence": why,
                         "Evidence Links": " | ".join(links[:6]),
                         "Publications": pubs})
 
     os.makedirs(GIFT_DIR, exist_ok=True)
     day = date.today().isoformat()
-    out.sort(key=lambda r: (r["Tier"], r["Name"]))
+    fit_rank = {"strong": 0, "moderate": 1, "": 2, "weak": 3}
+    out.sort(key=lambda r: (r["Tier"],
+                            fit_rank.get((r["Donation Fit"].split(" — ")[0]), 2),
+                            r["Name"]))
     out_path = os.path.join(GIFT_DIR, f"gift_candidates_{day}.csv")
     with open(out_path, "w", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=["Tier", "Name", "Title", "Company",
                                           "Profile URL", "Organization", "Org Role",
-                                          "Org Type", "Org Category", "Giftable",
+                                          "Org Type", "Org Category", "Org Size",
+                                          "Org About", "Donation Fit", "Giftable",
                                           "Evidence", "Evidence Links", "Publications"])
         w.writeheader(); w.writerows(out)
     audit_path = os.path.join(GIFT_DIR, f"gift_audit_{day}.csv")

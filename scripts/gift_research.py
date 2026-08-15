@@ -61,7 +61,9 @@ EXCLUDE_TITLE_RE = re.compile(r"(analyst|coordinator|specialist|associate\b|inte
 SENSITIVE = {
     "religious": re.compile(r"(church|ministry|ministries|parish|temple|mosque|synagogue|"
                             r"faith|christ|catholic|baptist|jewish|islamic|hindu|buddhis|"
-                            r"chaplain|mission(ary)?\b|gospel|bible)", re.I),
+                            r"chaplain|mission(ary)?\b|gospel|bible|diocese|archdiocese|"
+                            r"lutheran|methodist|presbyterian|evangel|salvation army|"
+                            r"young life|ymca|ywca)", re.I),
     "political": re.compile(r"(democrat|republican|gop\b|political|campaign|pac\b|"
                             r"libert(y|arian)|progressive|conservative|activis|lobby)", re.I),
     "health":    re.compile(r"(cancer|als\b|alzheim|diabet|autism|lupus|sclerosis|"
@@ -179,10 +181,11 @@ def stage_leads(st, max_leads, test):
         for el in elements:
             nm = first(el, "name", "fullName") or \
                  f"{el.get('firstName','')} {el.get('lastName','')}".strip()
+            pos = next((p for p in el.get("currentPositions") or [] if p.get("title")), {})
             st["leads"].append({
                 "name": nm,
-                "title": first(el, "position", "title", "headline", "currentPosition"),
-                "company": first(el, "companyName", "company", "currentCompany"),
+                "title": pos.get("title") or first(el, "position", "title", "headline"),
+                "company": pos.get("companyName") or first(el, "companyName", "company"),
                 "url": first(el, "linkedinUrl", "profileUrl", "url"),
                 "id": first(el, "id", "profileId", "publicIdentifier")})
         token = (resp.get("pagination") or {}).get("paginationToken")

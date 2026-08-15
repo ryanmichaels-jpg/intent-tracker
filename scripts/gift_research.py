@@ -238,19 +238,27 @@ def stage_activity(st, key, lead, tokens):
     """Contact-side evidence (stage A): authored posts + comments + reactions."""
     if key in st["activity"]:
         return st["activity"][key]
-    ev = {"authored": 0, "engaged": 0, "latest": ""}
+    ev = {"authored": 0, "engaged": 0, "latest": "", "links": []}
     posts = api_get("profile-posts", {"profile": lead["url"], "profileId": lead["id"] or None})
     for p in (posts or {}).get("elements") or []:
         txt = first(p, "content", "text", "commentary")
         if text_mentions(txt, tokens):
             ev["authored"] += 1
             ev["latest"] = max(ev["latest"], first(p, "postedDate", "date"))
+            link = first(p, "linkedinUrl", "url", "postUrl")
+            if link:
+                ev["links"].append(f"authored: {link}")
     for ep in ("profile-comments", "profile-reactions"):
         resp = api_get(ep, {"profile": lead["url"], "profileId": lead["id"] or None})
         for item in (resp or {}).get("elements") or []:
             blob = json.dumps(item)[:2000]
             if text_mentions(blob, tokens):
                 ev["engaged"] += 1
+                post = item.get("post") or item
+                link = first(post, "linkedinUrl", "url", "postUrl")
+                if link:
+                    kind = "commented" if ep == "profile-comments" else "reacted"
+                    ev["links"].append(f"{kind}: {link}")
     st["activity"][key] = ev
     save_state(st)
     return ev
@@ -275,8 +283,8 @@ def org_side_engagement(st, org_name, lead, max_posts=5):
         st["org_cache"][ck] = cache
         save_state(st)
     if not cache["page"]:
-        return None  # org has no findable LinkedIn page — not evidence against
-    hits = 0
+        return None, []  # org has no findable LinkedIn page — not evidence against
+    hits, links = 0, []
     lead_name, lead_url = norm(lead["name"]), (lead["url"] or "").rstrip("/")
     for post_url in cache["posts"]:
         for ep in ("post-reactions", "post-comments"):
@@ -285,7 +293,9 @@ def org_side_engagement(st, org_name, lead, max_posts=5):
                 blob = json.dumps(item)
                 if (lead_url and lead_url in blob) or (lead_name and lead_name in norm(blob)):
                     hits += 1
-    return hits
+                    kind = "reacted to org post" if ep == "post-reactions" else "commented on org post"
+                    links.append(f"{kind}: {post_url}")
+    return hits, links
 
 
 def is_current(aff):
@@ -355,18 +365,20 @@ def main():
             cat = classify_org(aff["org"])
             tokens = org_tokens(aff["org"])
             ev = stage_activity(st, key, lead, tokens)
-            org_hits = None if (a.skip_org_side or cat != "neutral") else \
+            org_hits, org_links = (None, []) if (a.skip_org_side or cat != "neutral") else \
                 org_side_engagement(st, aff["org"], lead)
             tier, why = score(aff, ev, org_hits)
             if tier == "C":
                 audit.append({**lead, "reason": f"tier C: {why} ({aff['org']})"})
                 continue
+            links = (ev.get("links") or []) + org_links
             out.append({"Tier": tier, "Name": lead["name"], "Title": lead["title"],
                         "Company": lead["company"], "Profile URL": lead["url"],
                         "Organization": aff["org"], "Org Role": aff["role"],
                         "Org Type": aff["kind"], "Org Category": cat,
                         "Giftable": "REVIEW-SENSITIVE" if cat != "neutral" else "YES",
-                        "Evidence": why})
+                        "Evidence": why,
+                        "Evidence Links": " | ".join(links[:6])})
 
     os.makedirs(GIFT_DIR, exist_ok=True)
     day = date.today().isoformat()
@@ -376,7 +388,7 @@ def main():
         w = csv.DictWriter(f, fieldnames=["Tier", "Name", "Title", "Company",
                                           "Profile URL", "Organization", "Org Role",
                                           "Org Type", "Org Category", "Giftable",
-                                          "Evidence"])
+                                          "Evidence", "Evidence Links"])
         w.writeheader(); w.writerows(out)
     audit_path = os.path.join(GIFT_DIR, f"gift_audit_{day}.csv")
     with open(audit_path, "w", newline="", encoding="utf-8") as f:

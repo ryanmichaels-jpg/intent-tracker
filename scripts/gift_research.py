@@ -57,6 +57,16 @@ SENIOR_RE = re.compile(r"(senior\s*manager|sr\.?\s*manager|head\b|director|vice\
 EXCLUDE_TITLE_RE = re.compile(r"(analyst|coordinator|specialist|associate\b|intern\b|"
                               r"consultant|recruiter|assistant\b)", re.I)
 
+# Orgs never worth a donation-gift (huge trade associations): hard-excluded.
+ORG_BLOCKLIST_RE = re.compile(r"(world\s*at\s*work|worldatwork|\bshrm\b|"
+                              r"society for human resource management)", re.I)
+
+# The lead's employer must be verifiably tech/software (belt-and-braces on top of
+# the server-side industry filter, which uses LinkedIn ids that can misclassify).
+TECH_INDUSTRY_RE = re.compile(r"(software|technolog|internet|information technology|"
+                              r"it services|computer|cloud|saas|data|cyber|"
+                              r"artificial intelligence|semiconductor|fintech)", re.I)
+
 # Sensitive-affiliation flags: kept in output, labeled, default do-not-gift.
 SENSITIVE = {
     "religious": re.compile(r"(church|ministry|ministries|parish|temple|mosque|synagogue|"
@@ -115,7 +125,7 @@ def load_state():
         with open(STATE_PATH) as f:
             return json.load(f)
     return {"leads": [], "leads_done": False, "profiles": {}, "activity": {},
-            "org_cache": {}}
+            "org_cache": {}, "companies": {}}
 
 
 def save_state(st):
@@ -194,6 +204,7 @@ def stage_leads(st, max_leads, test):
                 "name": nm,
                 "title": pos.get("title") or first(el, "position", "title", "headline"),
                 "company": pos.get("companyName") or first(el, "companyName", "company"),
+                "companyUrl": pos.get("companyLinkedinUrl", ""),
                 "url": first(el, "linkedinUrl", "profileUrl", "url"),
                 "id": first(el, "id", "profileId", "publicIdentifier")})
         token = (resp.get("pagination") or {}).get("paginationToken")
@@ -217,6 +228,32 @@ def gate(lead):
     return None
 
 
+def company_is_tech(st, lead):
+    """Verify the employer's industry via a cached company lookup. Fail-closed:
+    unverifiable companies are cut (quality over volume) with the reason recorded."""
+    curl = lead.get("companyUrl") or ""
+    ck = norm(curl or lead["company"])
+    if not ck:
+        return False, "no company on lead"
+    if ck not in st["companies"]:
+        params = {"url": curl} if curl else {"search": lead["company"]}
+        resp = api_get("company", params)
+        el = (resp or {}).get("element") or resp or {}
+        inds = el.get("industries") or []
+        if isinstance(inds, str):
+            inds = [inds]
+        inds = [i.get("name", "") if isinstance(i, dict) else str(i) for i in inds]
+        st["companies"][ck] = {"industries": [i for i in inds if i],
+                               "name": first(el, "name")}
+        save_state(st)
+    inds = st["companies"][ck]["industries"]
+    if not inds:
+        return False, "company industry unverified"
+    if any(TECH_INDUSTRY_RE.search(i) for i in inds):
+        return True, ""
+    return False, f"company not tech ({'; '.join(inds)[:60]})"
+
+
 def stage_profiles(st, gated, cap):
     for lead in gated[:cap]:
         key = lead["url"] or lead["id"]
@@ -237,47 +274,82 @@ def stage_profiles(st, gated, cap):
                          "kind": "organization"})
         st["profiles"][key] = {"affiliations": vols,
                                "causes": el.get("causes") or [],
+                               "publications": extract_pubs(el),
                                "fetched": bool(resp)}
         save_state(st)
         print(f"[profiles] {len(st['profiles'])} fetched", file=sys.stderr)
 
 
-def stage_activity(st, key, lead, tokens):
-    """Contact-side evidence (stage A): authored posts + comments + reactions."""
-    if key in st["activity"]:
-        return st["activity"][key]
-    ev = {"authored": 0, "engaged": 0, "latest": "", "links": []}
+def extract_pubs(el):
+    pubs = []
+    for p in (el.get("publications") or [])[:3]:
+        t = first(p, "title")
+        link = first(p, "link", "url")
+        if t:
+            pubs.append(f"{t} ({link})" if link else t)
+    return " | ".join(pubs)
+
+
+def get_publications(st, key, lead):
+    """Publications for a candidate; older cache entries predate the field, so
+    lazily re-fetch the profile once for candidates only."""
+    prof = st["profiles"].get(key) or {}
+    if "publications" in prof:
+        return prof["publications"]
+    resp = api_get("profile", {"url": lead["url"], "profileId": lead["id"] or None})
+    el = (resp or {}).get("element") or resp or {}
+    prof["publications"] = extract_pubs(el)
+    st["profiles"][key] = prof
+    save_state(st)
+    return prof["publications"]
+
+
+def stage_activity(st, key, lead, org_name, org_page):
+    """Contact-side evidence, STRICT:
+    - authored: the post text contains the org's FULL name as an exact phrase
+      (normalized) — never token-fraction matching.
+    - engaged: counts ONLY if the engaged post was authored by the org's own
+      LinkedIn page (the page's /company/... path appears in the item payload)."""
+    ck = f"{key}||{norm(org_name)}"
+    if ck in st["activity"]:
+        return st["activity"][ck]
+    ev = {"authored": 0, "latest": "", "links": [], "engaged_posts": []}
+    phrase = norm(org_name)
     posts = api_get("profile-posts", {"profile": lead["url"], "profileId": lead["id"] or None})
     for p in (posts or {}).get("elements") or []:
-        txt = first(p, "content", "text", "commentary")
-        if text_mentions(txt, tokens):
+        txt = norm(first(p, "content", "text", "commentary"))
+        if phrase and phrase in txt:
             ev["authored"] += 1
-            ev["latest"] = max(ev["latest"], first(p, "postedDate", "date"))
+            ev["latest"] = max(ev["latest"], first(p, "postedDate", "postedAt",
+                                                   "date", "publishedAt"))
             link = first(p, "linkedinUrl", "url", "postUrl")
             if link:
                 ev["links"].append(f"authored: {link}")
-    for ep in ("profile-comments", "profile-reactions"):
-        resp = api_get(ep, {"profile": lead["url"], "profileId": lead["id"] or None})
-        for item in (resp or {}).get("elements") or []:
-            blob = json.dumps(item)[:2000]
-            if text_mentions(blob, tokens):
-                ev["engaged"] += 1
+    page_path = ""
+    if org_page and "linkedin.com" in org_page:
+        page_path = org_page.rstrip("/").split("linkedin.com")[-1].lower()
+    if page_path:
+        for ep in ("profile-comments", "profile-reactions"):
+            resp = api_get(ep, {"profile": lead["url"], "profileId": lead["id"] or None})
+            for item in (resp or {}).get("elements") or []:
+                if page_path not in json.dumps(item).lower():
+                    continue  # engaged post not authored by the org's page
                 post = item.get("post") or item
-                link = first(post, "linkedinUrl", "url", "postUrl")
-                if link:
-                    kind = "commented" if ep == "profile-comments" else "reacted"
+                link = first(post, "linkedinUrl", "url", "postUrl") or f"unlinked-{ep}"
+                kind = "commented on org post" if ep == "profile-comments" \
+                    else "reacted to org post"
+                ev["engaged_posts"].append(link)
+                if not link.startswith("unlinked"):
                     ev["links"].append(f"{kind}: {link}")
-    st["activity"][key] = ev
+    st["activity"][ck] = ev
     save_state(st)
     return ev
 
 
-def org_side_engagement(st, org_name, lead, max_posts=5):
-    """Org-side evidence (stage B): does the contact appear among reactors/commenters
-    of the org's recent posts? Org page + posts are cached across contacts."""
+def resolve_org(st, org_name, max_posts=5):
+    """Org name -> its LinkedIn page + recent post URLs (cached across contacts)."""
     ck = norm(org_name)
-    cache = st["org_cache"].get(ck)
-    if cache is None:
+    if ck not in st["org_cache"]:
         cache = {"page": "", "posts": []}
         found = api_get("company-search", {"search": org_name})
         for c in (found or {}).get("elements") or []:
@@ -290,9 +362,13 @@ def org_side_engagement(st, org_name, lead, max_posts=5):
                               for p in (posts or {}).get("elements") or []][:max_posts]
         st["org_cache"][ck] = cache
         save_state(st)
-    if not cache["page"]:
-        return None, []  # org has no findable LinkedIn page — not evidence against
-    hits, links = 0, []
+    return st["org_cache"][ck]
+
+
+def org_side_engagement(st, cache, lead):
+    """Org-side evidence: does the contact appear among reactors/commenters of the
+    org's OWN recent posts? Returns (engaged post urls, evidence links)."""
+    urls, links = [], []
     lead_name, lead_url = norm(lead["name"]), (lead["url"] or "").rstrip("/")
     for post_url in cache["posts"]:
         for ep in ("post-reactions", "post-comments"):
@@ -300,10 +376,10 @@ def org_side_engagement(st, org_name, lead, max_posts=5):
             for item in (resp or {}).get("elements") or []:
                 blob = json.dumps(item)
                 if (lead_url and lead_url in blob) or (lead_name and lead_name in norm(blob)):
-                    hits += 1
+                    urls.append(post_url)
                     kind = "reacted to org post" if ep == "post-reactions" else "commented on org post"
                     links.append(f"{kind}: {post_url}")
-    return hits, links
+    return urls, links
 
 
 def is_current(aff):
@@ -311,20 +387,22 @@ def is_current(aff):
     return end in ("", "present", "now")
 
 
-def score(aff, ev, org_hits):
-    """-> (tier, reason)"""
+def score(aff, ev, engagements):
+    """engagements = count of DISTINCT org-authored posts the contact engaged with.
+    -> (tier, reason)"""
     if not is_current(aff):
         return "C", "affiliation ended"
     leader = re.search(r"(board|chair|president|founder|organizer|lead|director|trustee|"
                        r"treasurer|secretary|mentor)", aff.get("role") or "", re.I)
-    if org_hits and org_hits >= 2:
-        return "A", f"engages with org's posts ({org_hits} recent)"
+    if engagements >= 2:
+        return "A", f"engaged with {engagements} of the org's own posts"
     if ev["authored"]:
-        return "A", f"posted about org ({ev['authored']}x, latest {ev['latest'] or 'n/a'})"
+        return "A", f"posted about org by name ({ev['authored']}x" + \
+               (f", latest {ev['latest']}" if ev["latest"] else "") + ")"
     if leader:
         return "A", f"leadership role: {aff.get('role')}"
-    if ev["engaged"] or org_hits == 1:
-        return "A", "engaged with org-related content"
+    if engagements == 1:
+        return "B", "single engagement with an org post"
     return "B", "current listing, no activity evidence"
 
 
@@ -342,13 +420,17 @@ def main():
     stage_leads(st, a.max_leads, a.test)
 
     audit, gated = [], []
-    for lead in st["leads"][:a.max_leads]:
+    batch = st["leads"][:a.max_leads]
+    for lead in batch:
         reason = gate(lead)
+        if not reason:
+            ok, why = company_is_tech(st, lead)
+            reason = why if not ok else None
         if reason:
             audit.append({**lead, "reason": reason})
         else:
             gated.append(lead)
-    print(f"[gate] {len(gated)} of {len(st['leads'])} pass persona/seniority",
+    print(f"[gate] {len(gated)} of {len(batch)} pass persona/seniority + tech-industry",
           file=sys.stderr)
 
     stage_profiles(st, gated, cap=5 if a.test else len(gated))
@@ -367,26 +449,36 @@ def main():
             audit.append({**lead, "reason": "no volunteer/org affiliation"})
             continue
         for aff in affs:
+            if ORG_BLOCKLIST_RE.search(aff["org"]):
+                audit.append({**lead, "reason": f"blocklisted org: {aff['org']}"})
+                continue
             if not is_current(aff):
                 audit.append({**lead, "reason": f"ended: {aff['org']}"})
                 continue
             cat = classify_org(aff["org"])
-            tokens = org_tokens(aff["org"])
-            ev = stage_activity(st, key, lead, tokens)
-            org_hits, org_links = (None, []) if (a.skip_org_side or cat != "neutral") else \
-                org_side_engagement(st, aff["org"], lead)
-            tier, why = score(aff, ev, org_hits)
+            org = resolve_org(st, aff["org"])
+            ev = stage_activity(st, key, lead, aff["org"], org["page"])
+            org_urls, org_links = ([], []) if (a.skip_org_side or cat != "neutral" or
+                                               not org["page"]) else \
+                org_side_engagement(st, org, lead)
+            # distinct org-authored posts the contact engaged with (both directions)
+            engagements = len(set(ev["engaged_posts"]) | set(org_urls))
+            tier, why = score(aff, ev, engagements)
             if tier == "C":
                 audit.append({**lead, "reason": f"tier C: {why} ({aff['org']})"})
                 continue
-            links = (ev.get("links") or []) + org_links
+            if not org["page"]:
+                why += "; org has no LinkedIn page (engagement unverifiable)"
+            links = list(dict.fromkeys((ev.get("links") or []) + org_links))
+            pubs = get_publications(st, key, lead)
             out.append({"Tier": tier, "Name": lead["name"], "Title": lead["title"],
                         "Company": lead["company"], "Profile URL": lead["url"],
                         "Organization": aff["org"], "Org Role": aff["role"],
                         "Org Type": aff["kind"], "Org Category": cat,
                         "Giftable": "REVIEW-SENSITIVE" if cat != "neutral" else "YES",
                         "Evidence": why,
-                        "Evidence Links": " | ".join(links[:6])})
+                        "Evidence Links": " | ".join(links[:6]),
+                        "Publications": pubs})
 
     os.makedirs(GIFT_DIR, exist_ok=True)
     day = date.today().isoformat()
@@ -396,11 +488,12 @@ def main():
         w = csv.DictWriter(f, fieldnames=["Tier", "Name", "Title", "Company",
                                           "Profile URL", "Organization", "Org Role",
                                           "Org Type", "Org Category", "Giftable",
-                                          "Evidence", "Evidence Links"])
+                                          "Evidence", "Evidence Links", "Publications"])
         w.writeheader(); w.writerows(out)
     audit_path = os.path.join(GIFT_DIR, f"gift_audit_{day}.csv")
     with open(audit_path, "w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=["name", "title", "company", "url", "id", "reason"])
+        w = csv.DictWriter(f, fieldnames=["name", "title", "company", "url", "id", "reason"],
+                           extrasaction="ignore")
         w.writeheader(); w.writerows(audit)
 
     a_n = sum(1 for r in out if r["Tier"] == "A")

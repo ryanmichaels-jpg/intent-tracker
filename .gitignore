@@ -1,6 +1,8 @@
 # Never commit data
 data/raw/
 data/out/
+data/audit/
+data/gift/
 *.csv
 *.xlsx
 *.json

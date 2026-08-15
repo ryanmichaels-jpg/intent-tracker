@@ -55,7 +55,10 @@ PERSONA_RE = re.compile(r"(total\s*rewards|compensation|comp\s*(&|and)\s*benefit
 SENIOR_RE = re.compile(r"(senior\s*manager|sr\.?\s*manager|head\b|director|vice\s*president"
                        r"|\bvp\b|chief|\bc[a-z]o\b|president)", re.I)
 EXCLUDE_TITLE_RE = re.compile(r"(analyst|coordinator|specialist|associate\b|intern\b|"
-                              r"consultant|recruiter|assistant\b)", re.I)
+                              r"consultant|recruiter|assistant\b|"
+                              # Adjacent comp disciplines that are NOT the buyer persona:
+                              r"sales\s*comp|incentive\s*comp|sales\s*incentive|"
+                              r"commission|workers'?\s*comp|workman'?s\s*comp)", re.I)
 
 # Orgs never worth a donation-gift (huge trade associations): hard-excluded.
 ORG_BLOCKLIST_RE = re.compile(r"(world\s*at\s*work|worldatwork|\bshrm\b|"

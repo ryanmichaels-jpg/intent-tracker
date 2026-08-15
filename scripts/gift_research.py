@@ -342,7 +342,7 @@ def main():
     stage_leads(st, a.max_leads, a.test)
 
     audit, gated = [], []
-    for lead in st["leads"]:
+    for lead in st["leads"][:a.max_leads]:
         reason = gate(lead)
         if reason:
             audit.append({**lead, "reason": reason})

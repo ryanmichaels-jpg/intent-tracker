@@ -244,13 +244,21 @@ def gate(lead):
 
 
 def company_is_tech(st, lead):
-    """Verify the employer's industry via a cached company lookup. Fail-closed:
-    unverifiable companies are cut (quality over volume) with the reason recorded."""
+    """Is the employer a tech company? Three steps, cheapest first:
+    1. LinkedIn industry label clearly tech -> pass (free).
+    2. No label at all -> cut, fail-closed.
+    3. Ambiguous label (Financial Services, Insurance, ...) -> Haiku reads the
+       company's LinkedIn description: a payments-API startup labeled Financial
+       Services is tech; a regional bank is not. Verdict cached per company."""
     curl = lead.get("companyUrl") or ""
     ck = norm(curl or lead["company"])
     if not ck:
         return False, "no company on lead"
-    if ck not in st["companies"]:
+    rec = st["companies"].get(ck)
+    label_tech = rec and any(TECH_INDUSTRY_RE.search(i) for i in rec.get("industries", []))
+    if rec is None or ("about" not in rec and not label_tech):
+        # fetch — or re-fetch an older cache entry that lacks the description
+        # we now need for the ambiguous-label judgment
         params = {"url": curl} if curl else {"search": lead["company"]}
         resp = api_get("company", params)
         el = (resp or {}).get("element") or resp or {}
@@ -258,15 +266,60 @@ def company_is_tech(st, lead):
         if isinstance(inds, str):
             inds = [inds]
         inds = [i.get("name", "") if isinstance(i, dict) else str(i) for i in inds]
-        st["companies"][ck] = {"industries": [i for i in inds if i],
-                               "name": first(el, "name")}
+        rec = {"industries": [i for i in inds if i], "name": first(el, "name"),
+               "about": (first(el, "description", "tagline") or "")[:400],
+               "staff": str(el.get("employeeCount") or "")}
+        st["companies"][ck] = rec
         save_state(st)
-    inds = st["companies"][ck]["industries"]
+    inds = rec.get("industries", [])
     if not inds:
         return False, "company industry unverified"
     if any(TECH_INDUSTRY_RE.search(i) for i in inds):
         return True, ""
-    return False, f"company not tech ({'; '.join(inds)[:60]})"
+    if "tech_verdict" not in rec:
+        rec["tech_verdict"] = judge_company_tech(lead["company"], rec)
+        st["companies"][ck] = rec
+        save_state(st)
+    v = rec["tech_verdict"]
+    if v.get("tech"):
+        return True, ""
+    return False, f"company not tech ({v.get('via','label')}: {v.get('reason') or '; '.join(inds)[:50]})"
+
+
+def judge_company_tech(name, rec):
+    """Haiku call: tech company despite a non-tech industry label? Without an
+    ANTHROPIC_API_KEY the label stands (not tech)."""
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        return {"tech": False, "via": "label", "reason": ""}
+    body = {"model": ANTHROPIC_MODEL, "max_tokens": 120,
+            "messages": [{"role": "user", "content":
+                          "Is this a TECHNOLOGY company (software/platform/API products, "
+                          "tech-first startup), even though its LinkedIn industry label is "
+                          "not tech? A fintech/health-tech/insurtech that builds software = "
+                          "tech: true. A traditional bank, insurer, hospital, manufacturer, "
+                          "retailer = tech: false.\n"
+                          f"Company: {name}\n"
+                          f"LinkedIn industry label: {'; '.join(rec.get('industries', []))}\n"
+                          f"Staff count: {rec.get('staff') or 'unknown'}\n"
+                          f"LinkedIn description: {rec.get('about') or 'none'}\n"
+                          'Reply ONLY with JSON: {"tech":true|false,"reason":"<max 10 words>"}'}]}
+    req = urllib.request.Request("https://api.anthropic.com/v1/messages",
+                                 data=json.dumps(body).encode(),
+                                 headers={"x-api-key": key,
+                                          "anthropic-version": "2023-06-01",
+                                          "content-type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            txt = json.loads(r.read().decode())["content"][0]["text"]
+        m = re.search(r"\{.*\}", txt, re.S)
+        if m:
+            parsed = json.loads(m.group(0))
+            return {"tech": bool(parsed.get("tech")), "via": "Haiku",
+                    "reason": str(parsed.get("reason", ""))[:80]}
+    except Exception as e:
+        print(f"[judge] company {name}: {type(e).__name__} — label stands", file=sys.stderr)
+    return {"tech": False, "via": "label", "reason": ""}
 
 
 def stage_profiles(st, gated, cap):

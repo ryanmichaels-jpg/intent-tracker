@@ -68,7 +68,7 @@ EXCLUDE_TITLE_RE = re.compile(r"(analyst|coordinator|specialist|associate\b|inte
 # Orgs never worth a donation-gift: huge trade associations, plus Greek-letter
 # fraternities/sororities/honor societies (a donation there isn't a cause gift).
 _GREEK = r"alpha|beta|gamma|delta|epsilon|zeta|eta|theta|iota|kappa|lambda|mu|nu|xi|omicron|pi|rho|sigma|tau|upsilon|phi|chi|psi|omega"
-ORG_BLOCKLIST_RE = re.compile(r"(world\s*at\s*work|worldatwork|\bshrm\b|"
+ORG_BLOCKLIST_RE = re.compile(r"(world\s*at\s*work|worldatwork|shrm|"
                               r"society for human resource management|"
                               r"fraternit|sororit|honou?r\s*society|greek\s*life|"
                               rf"\b({_GREEK})\s+({_GREEK})(\s+({_GREEK}))?\b)", re.I)

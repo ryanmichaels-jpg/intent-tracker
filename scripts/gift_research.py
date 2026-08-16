@@ -237,13 +237,19 @@ def stage_leads(st, max_leads, test):
     save_state(st)
 
 
-def gate(lead):
+MANAGER_RE = re.compile(r"\b(manager|mgr\.?|lead)\b", re.I)
+
+
+def gate(lead, include_managers=False):
     t = lead["title"] or ""
     if not PERSONA_RE.search(t):
         return "title: not comp/total-rewards"
     if EXCLUDE_TITLE_RE.search(t):
         return "title: excluded level"
-    if not SENIOR_RE.search(t):
+    senior = SENIOR_RE.search(t)
+    if not senior and include_managers and MANAGER_RE.search(t):
+        return None  # manager-level allowed this run
+    if not senior:
         return "title: below senior manager"
     return None
 
@@ -546,6 +552,8 @@ def main():
     ap = argparse.ArgumentParser(description="Volunteer-affiliation gift research (HarvestAPI)")
     ap.add_argument("--max-leads", type=int, default=500)
     ap.add_argument("--test", action="store_true", help="1 lead page, 5 profiles")
+    ap.add_argument("--include-managers", action="store_true",
+                    help="also allow plain Manager-level titles (default: Sr Manager+)")
     ap.add_argument("--skip-org-side", action="store_true",
                     help="skip stage B (org-side engagement) to halve corroboration cost")
     a = ap.parse_args()
@@ -556,7 +564,7 @@ def main():
     audit, gated = [], []
     batch = st["leads"][:a.max_leads]
     for lead in batch:
-        reason = gate(lead)
+        reason = gate(lead, include_managers=a.include_managers)
         if not reason:
             ok, why = company_is_tech(st, lead)
             reason = why if not ok else None

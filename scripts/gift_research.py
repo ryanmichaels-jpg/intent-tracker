@@ -55,7 +55,7 @@ PERSONA_RE = re.compile(r"(total\s*rewards|compensation|comp\s*(&|and)\s*benefit
 # Senior Manager and above. Handles: words between senior and manager
 # ("Senior Compensation Manager"), abbreviations ("Sr. Mgr."), inverted forms
 # ("Manager, Senior"), and leader-form titles ("Global Total Rewards Leader").
-SENIOR_RE = re.compile(r"(\bhead\b|director|vice\s*president|\bvp\b|chief|\bc[a-z]o\b|"
+SENIOR_RE = re.compile(r"(\bhead\b|director|vice\s*president|\b[saev]?vp\b|chief|\bc[a-z]o\b|"
                        r"president|\bleader\b|"
                        r"\b(senior|sr\.?)\b[^,;|]{0,40}\b(manager|mgr\.?)|"
                        r"\b(manager|mgr\.?),?\s*(senior|sr\.?)\b)", re.I)
